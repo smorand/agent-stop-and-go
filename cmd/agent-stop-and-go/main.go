@@ -28,6 +28,12 @@ func main() {
 	}
 
 	ag := agent.New(cfg, store)
+
+	// Start the MCP server
+	if err := ag.Start(); err != nil {
+		log.Fatalf("Failed to start agent: %v", err)
+	}
+
 	server := api.New(cfg, ag)
 
 	// Handle graceful shutdown
@@ -37,12 +43,16 @@ func main() {
 	go func() {
 		<-quit
 		log.Println("Shutting down server...")
+		if err := ag.Stop(); err != nil {
+			log.Printf("Error stopping agent: %v", err)
+		}
 		if err := server.Shutdown(); err != nil {
 			log.Printf("Error during shutdown: %v", err)
 		}
 	}()
 
 	log.Printf("Starting Agent Stop and Go API on %s:%d", cfg.Host, cfg.Port)
+	log.Printf("MCP Server: %s", cfg.MCP.Command)
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

@@ -7,12 +7,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MCPConfig holds the MCP server configuration.
+type MCPConfig struct {
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+}
+
 // Config holds the agent configuration loaded from agent.yaml.
 type Config struct {
-	Prompt  string `yaml:"prompt"`
-	Host    string `yaml:"host"`
-	Port    int    `yaml:"port"`
-	DataDir string `yaml:"data_dir"`
+	Prompt  string    `yaml:"prompt"`
+	Host    string    `yaml:"host"`
+	Port    int       `yaml:"port"`
+	DataDir string    `yaml:"data_dir"`
+	MCP     MCPConfig `yaml:"mcp"`
 }
 
 // Load reads and parses the agent.yaml configuration file.

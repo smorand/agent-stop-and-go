@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -22,9 +23,16 @@ func (s *Server) healthHandler(c *fiber.Ctx) error {
 	})
 }
 
+// toolsHandler returns the available MCP tools.
+func (s *Server) toolsHandler(c *fiber.Ctx) error {
+	tools := s.agent.GetTools()
+	return c.JSON(fiber.Map{
+		"tools": tools,
+	})
+}
+
 // CreateConversationRequest is the request body for creating a conversation.
 type CreateConversationRequest struct {
-	// Optional initial message to send
 	Message string `json:"message,omitempty"`
 }
 
@@ -46,7 +54,6 @@ func (s *Server) createConversationHandler(c *fiber.Ctx) error {
 			})
 		}
 
-		// Reload conversation after processing
 		conv, _ = s.agent.GetConversation(conv.ID)
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -69,7 +76,6 @@ func (s *Server) listConversationsHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Separate by status for better visibility
 	var active, waiting, completed int
 	for _, conv := range conversations {
 		switch conv.Status {
@@ -145,7 +151,6 @@ func (s *Server) sendMessageHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Reload conversation to get updated state
 	conv, _ = s.agent.GetConversation(id)
 
 	return c.JSON(fiber.Map{
@@ -156,7 +161,8 @@ func (s *Server) sendMessageHandler(c *fiber.Ctx) error {
 
 // ResolveApprovalRequest is the request body for resolving an approval.
 type ResolveApprovalRequest struct {
-	Answer string `json:"answer"`
+	Approved bool   `json:"approved"`
+	Action   string `json:"action"` // Alternative: "approve" or "reject"
 }
 
 // resolveApprovalHandler handles approval responses.
@@ -170,13 +176,14 @@ func (s *Server) resolveApprovalHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	if req.Answer == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "answer is required",
-		})
+	// Support both "approved" boolean and "action" string
+	approved := req.Approved
+	if req.Action != "" {
+		action := strings.ToLower(req.Action)
+		approved = action == "approve" || action == "approved" || action == "yes"
 	}
 
-	conv, result, err := s.agent.ResolveApproval(uuid, req.Answer)
+	conv, result, err := s.agent.ResolveApproval(uuid, approved)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": err.Error(),

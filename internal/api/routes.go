@@ -8,6 +8,9 @@ func (s *Server) setupRoutes() {
 	// Health check
 	s.app.Get("/health", s.healthHandler)
 
+	// Tools info
+	s.app.Get("/tools", s.toolsHandler)
+
 	// Conversation routes
 	s.app.Post("/conversations", s.createConversationHandler)
 	s.app.Get("/conversations", s.listConversationsHandler)

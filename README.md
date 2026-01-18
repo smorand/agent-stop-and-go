@@ -1,177 +1,139 @@
 # Agent Stop and Go
 
-An API for async autonomous agents with approval workflows. Agents process requests autonomously but can pause and wait for external approval before proceeding with sensitive actions.
+A generic API for building async autonomous agents that can pause execution and wait for external approval before performing destructive actions.
 
-## Concept
+## Features
 
-The API allows you to:
-1. Start conversations with an autonomous agent
-2. Send messages like a normal chat
-3. When the agent needs approval, it stops and returns a UUID
-4. The conversation stays stuck until you provide an answer via the approval endpoint
-5. All conversations are persisted to JSON files
+- **MCP Tool Support**: Agents use tools from external MCP (Model Context Protocol) servers
+- **Approval Workflow**: Destructive operations require explicit approval before execution
+- **Generic Architecture**: Swap the MCP server and prompt to create different agents
+- **Conversation Persistence**: All conversations are saved and can be resumed
+- **Real-time Status**: Track which conversations are waiting for approval
 
-## Installation
-
-### Prerequisites
-
-- Go 1.23 or later
-
-### Build
+## Quick Start
 
 ```bash
+# Build both binaries
 make build
-```
 
-### Run
-
-```bash
-make run
+# Create symlink for MCP server
+ln -sf mcp-resources-darwin-arm64 bin/mcp-resources  # macOS ARM
 # or
-./bin/agent-stop-and-go-darwin-arm64 --config agent.yaml
+ln -sf mcp-resources-linux-amd64 bin/mcp-resources   # Linux
+
+# Run the API
+make run
 ```
 
-## Configuration
+The API will start at http://localhost:8080
 
-Edit `agent.yaml`:
+## Usage
 
-```yaml
-prompt: |
-  You are an autonomous agent that processes user requests.
-  Sometimes you need external approval before proceeding.
-  When you need approval, respond with a message starting with [APPROVAL_NEEDED]:
-  followed by your question or the action that needs approval.
-
-port: 8080
-data_dir: ./data
-```
-
-## API Endpoints
-
-### Health Check
+### List Available Tools
 
 ```bash
-GET /health
+curl http://localhost:8080/tools
 ```
 
-### Conversations
-
-#### Start a new conversation
+### Start a Conversation
 
 ```bash
-POST /conversations
-Content-Type: application/json
-
-{
-  "message": "Hello!"  # Optional initial message
-}
+curl -X POST http://localhost:8080/conversations
 ```
 
-#### List all conversations
+### Send a Message
 
 ```bash
-GET /conversations
+# List resources (automatic - no approval needed)
+curl -X POST http://localhost:8080/conversations/{id}/messages \
+  -d '{"message": "list resources"}'
+
+# Add a resource (requires approval)
+curl -X POST http://localhost:8080/conversations/{id}/messages \
+  -d '{"message": "add resource server-1 with value 100"}'
 ```
 
-Returns conversations grouped by status (active, waiting_approval, completed).
+### Handle Approvals
 
-#### Get a specific conversation
+When a destructive action is requested, you'll receive an approval UUID:
 
-```bash
-GET /conversations/:id
-```
-
-#### Send a message
-
-```bash
-POST /conversations/:id/messages
-Content-Type: application/json
-
-{
-  "message": "Please delete the old files"
-}
-```
-
-If the agent needs approval, the response includes:
 ```json
 {
-  "result": {
-    "response": "[APPROVAL_NEEDED]: This action requires approval...",
-    "waiting_approval": true,
-    "approval": {
-      "uuid": "abc-123-def",
-      "conversation_id": "...",
-      "question": "This action requires approval..."
-    }
+  "waiting_approval": true,
+  "approval": {
+    "uuid": "abc-123",
+    "tool_name": "resources_add",
+    "tool_args": {"name": "server-1", "value": 100}
   }
 }
 ```
 
-### Approvals
-
-#### Respond to a pending approval
+Approve or reject the action:
 
 ```bash
-POST /approvals/:uuid
-Content-Type: application/json
+# Approve
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"approved": true}'
 
-{
-  "answer": "Yes, proceed"
-}
+# Reject
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"action": "reject"}'
 ```
 
-## Usage Example
+## Configuration
 
-```bash
-# Start the API
-make run &
+Edit `agent.yaml` to customize the agent:
 
-# Create a conversation
-curl -X POST http://localhost:8080/conversations \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello!"}'
+```yaml
+prompt: |
+  Your agent's system prompt here...
 
-# Send a message that triggers approval
-curl -X POST http://localhost:8080/conversations/{id}/messages \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Please delete the cache"}'
+host: 0.0.0.0
+port: 8080
+data_dir: ./data
 
-# Response shows waiting_approval: true with a UUID
-
-# Resolve the approval
-curl -X POST http://localhost:8080/approvals/{uuid} \
-  -H "Content-Type: application/json" \
-  -d '{"answer": "Yes, approved"}'
-
-# Check conversation status
-curl http://localhost:8080/conversations/{id}
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/resources.db
 ```
 
-## Project Structure
+## Creating Custom Agents
 
-```
-agent-stop-and-go/
-├── agent.yaml                # Agent configuration
-├── data/                     # JSON storage for conversations
-├── cmd/agent-stop-and-go/
-│   └── main.go               # Entry point
-└── internal/
-    ├── api/                  # Fiber HTTP handlers
-    ├── agent/                # Agent logic with approval workflow
-    ├── config/               # YAML config loader
-    ├── conversation/         # Conversation data model
-    └── storage/              # JSON file persistence
+To create a different agent:
+
+1. **Create a new MCP server** that provides your tools
+2. **Mark destructive tools** with `destructiveHint: true`
+3. **Update agent.yaml** with your MCP server and a new prompt
+4. **Run the agent** - approval workflow works automatically
+
+## MCP Server Protocol
+
+MCP servers communicate via JSON-RPC 2.0 over stdin/stdout:
+
+```json
+// Request
+{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+
+// Response
+{"jsonrpc": "2.0", "id": 1, "result": {"tools": [...]}}
 ```
 
-## Development
+Tools can have a `destructiveHint` property to trigger the approval workflow.
 
-```bash
-make build      # Build for current platform
-make run        # Build and run
-make test       # Run tests
-make fmt        # Format code
-make check      # Run all checks
-```
+## API Reference
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /docs | Interactive API documentation |
+| GET | /tools | List available MCP tools |
+| GET | /health | Health check |
+| POST | /conversations | Create conversation |
+| GET | /conversations | List all conversations |
+| GET | /conversations/:id | Get conversation details |
+| POST | /conversations/:id/messages | Send message |
+| POST | /approvals/:uuid | Resolve approval |
 
 ## License
 
