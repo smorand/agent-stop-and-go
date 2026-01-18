@@ -1,0 +1,38 @@
+# Binary
+bin
+
+# Data directory (runtime conversations)
+data/
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+.jukit/
+*.swp
+*.swo
+
+# Ralph
+ralph.sh
+ralph.yaml
+stories.yaml
+progress.md
+
+# OS files
+.DS_Store
+Thumbs.db
