@@ -8,10 +8,15 @@ Generic API for async autonomous agents with MCP tool support and approval workf
 
 - **Language**: Go 1.23
 - **Web Framework**: Fiber
+- **LLM**: Gemini 2.5 Flash (generativelanguage API)
 - **MCP Protocol**: JSON-RPC 2.0 over stdio
 - **Config**: YAML (gopkg.in/yaml.v3)
 - **Storage**: JSON files (conversations), SQLite (MCP resources)
 - **Build**: Make
+
+## Environment Variables
+
+- `GEMINI_API_KEY`: Required. API key for Gemini LLM.
 
 ## Key Commands
 
@@ -30,7 +35,8 @@ cmd/
 └── mcp-resources/main.go         # MCP server (SQLite resources)
 internal/
 ├── api/                          # HTTP handlers (Fiber)
-├── agent/                        # Agent logic with MCP integration
+├── agent/                        # Agent logic with LLM + MCP
+├── llm/                          # Gemini LLM client
 ├── mcp/                          # MCP client (JSON-RPC)
 ├── config/                       # YAML config loader
 ├── conversation/                 # Data models with tool calls
@@ -67,6 +73,9 @@ host: 0.0.0.0
 port: 8080
 data_dir: ./data
 
+llm:
+  model: gemini-2.5-flash
+
 mcp:
   command: ./bin/mcp-resources
   args:
@@ -86,12 +95,14 @@ mcp:
 
 ```
 User: "add resource X"
-  → Agent parses intent → resources_add (destructiveHint=true)
-  → Create PendingApproval with UUID
+  → LLM (Gemini) determines intent and calls resources_add
+  → Tool has destructiveHint=true → Create PendingApproval with UUID
   → Return approval request to client
   → Wait...
 
-POST /approvals/{uuid} { approved: true }
+POST /approvals/{uuid} { "approved": true }
+  # or { "action": "approve" }
+  # or { "answer": "yes" }
   → Execute tool via MCP
   → Return result
 ```

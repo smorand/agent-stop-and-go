@@ -163,6 +163,7 @@ func (s *Server) sendMessageHandler(c *fiber.Ctx) error {
 type ResolveApprovalRequest struct {
 	Approved bool   `json:"approved"`
 	Action   string `json:"action"` // Alternative: "approve" or "reject"
+	Answer   string `json:"answer"` // Alternative: "yes" or "no"
 }
 
 // resolveApprovalHandler handles approval responses.
@@ -176,11 +177,15 @@ func (s *Server) resolveApprovalHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// Support both "approved" boolean and "action" string
+	// Support "approved" boolean, "action" string, and "answer" string
 	approved := req.Approved
 	if req.Action != "" {
 		action := strings.ToLower(req.Action)
 		approved = action == "approve" || action == "approved" || action == "yes"
+	}
+	if req.Answer != "" {
+		answer := strings.ToLower(req.Answer)
+		approved = answer == "yes" || answer == "y" || answer == "true" || answer == "approve" || answer == "approved"
 	}
 
 	conv, result, err := s.agent.ResolveApproval(uuid, approved)

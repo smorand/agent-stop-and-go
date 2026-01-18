@@ -4,15 +4,19 @@ A generic API for building async autonomous agents that can pause execution and 
 
 ## Features
 
+- **LLM-Powered**: Uses Gemini 2.5 Flash for natural language understanding
 - **MCP Tool Support**: Agents use tools from external MCP (Model Context Protocol) servers
 - **Approval Workflow**: Destructive operations require explicit approval before execution
-- **Generic Architecture**: Swap the MCP server and prompt to create different agents
+- **Generic Architecture**: Swap the MCP server, LLM model, and prompt to create different agents
 - **Conversation Persistence**: All conversations are saved and can be resumed
 - **Real-time Status**: Track which conversations are waiting for approval
 
 ## Quick Start
 
 ```bash
+# Set your Gemini API key
+export GEMINI_API_KEY=your-api-key
+
 # Build both binaries
 make build
 
@@ -68,16 +72,24 @@ When a destructive action is requested, you'll receive an approval UUID:
 }
 ```
 
-Approve or reject the action:
+Approve or reject the action (multiple formats supported):
 
 ```bash
-# Approve
+# Approve (any of these)
 curl -X POST http://localhost:8080/approvals/abc-123 \
   -d '{"approved": true}'
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"action": "approve"}'
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"answer": "yes"}'
 
-# Reject
+# Reject (any of these)
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"approved": false}'
 curl -X POST http://localhost:8080/approvals/abc-123 \
   -d '{"action": "reject"}'
+curl -X POST http://localhost:8080/approvals/abc-123 \
+  -d '{"answer": "no"}'
 ```
 
 ## Configuration
@@ -92,12 +104,18 @@ host: 0.0.0.0
 port: 8080
 data_dir: ./data
 
+llm:
+  model: gemini-2.5-flash  # Gemini model to use
+
 mcp:
   command: ./bin/mcp-resources
   args:
     - --db
     - ./data/resources.db
 ```
+
+**Environment Variables:**
+- `GEMINI_API_KEY`: Required. Your Google AI API key for Gemini.
 
 ## Creating Custom Agents
 

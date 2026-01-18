@@ -13,12 +13,18 @@ type MCPConfig struct {
 	Args    []string `yaml:"args"`
 }
 
+// LLMConfig holds the LLM configuration.
+type LLMConfig struct {
+	Model string `yaml:"model"`
+}
+
 // Config holds the agent configuration loaded from agent.yaml.
 type Config struct {
 	Prompt  string    `yaml:"prompt"`
 	Host    string    `yaml:"host"`
 	Port    int       `yaml:"port"`
 	DataDir string    `yaml:"data_dir"`
+	LLM     LLMConfig `yaml:"llm"`
 	MCP     MCPConfig `yaml:"mcp"`
 }
 
@@ -42,6 +48,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "./data"
+	}
+	if cfg.LLM.Model == "" {
+		cfg.LLM.Model = "gemini-2.5-flash"
 	}
 
 	return &cfg, nil
