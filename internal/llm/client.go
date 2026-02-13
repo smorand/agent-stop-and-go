@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"strings"
 
 	"agent-stop-and-go/internal/mcp"
@@ -8,7 +9,7 @@ import (
 
 // Client is the interface for LLM providers.
 type Client interface {
-	GenerateWithTools(systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error)
+	GenerateWithTools(ctx context.Context, systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error)
 }
 
 // Message represents a conversation message.

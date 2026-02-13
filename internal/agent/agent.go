@@ -187,7 +187,7 @@ func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Con
 	tools := a.getAllTools()
 
 	// Call LLM with tools
-	response, err := a.llmClient.GenerateWithTools(a.config.Prompt, llmMessages, tools)
+	response, err := a.llmClient.GenerateWithTools(ctx, a.config.Prompt, llmMessages, tools)
 	if err != nil {
 		errorMsg := fmt.Sprintf("LLM error: %v", err)
 		conv.AddMessage(conversation.RoleAssistant, errorMsg)

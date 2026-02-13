@@ -104,7 +104,7 @@ type geminiError struct {
 }
 
 // GenerateWithTools sends a request to Gemini with function calling support.
-func (c *GeminiClient) GenerateWithTools(systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error) {
+func (c *GeminiClient) GenerateWithTools(ctx context.Context, systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error) {
 	// Convert MCP tools to Gemini function declarations
 	funcDecls := make([]geminiFunctionDecl, 0, len(tools))
 	for _, tool := range tools {
@@ -179,7 +179,7 @@ func (c *GeminiClient) GenerateWithTools(systemPrompt string, messages []Message
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

@@ -1,4 +1,4 @@
-.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild test fmt vet lint check run info help list-commands docker docker-run compose-up compose-down e2e
+.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild rebuild-all test test-unit test-all fmt vet lint check run info help list-commands docker docker-build docker-push docker-run run-up run-down compose-up compose-down e2e init-mod init-deps
 
 # Detect current platform
 GOOS=$(shell go env GOOS)
@@ -72,7 +72,9 @@ else
 	@$(MAKE) build-flat-all
 endif
 
-rebuild: clean-all build
+rebuild: clean build
+
+rebuild-all: clean-all build
 
 # Helper target: Build single command for current platform (multi-command layout)
 build-cmd-current: $(GO_SUM_PATH)
@@ -357,14 +359,20 @@ clean-all: clean
 	@rm -f $(GO_MOD_PATH) $(GO_SUM_PATH)
 	@echo "Clean complete!"
 
-# Run tests
-test:
-	@echo "Running tests..."
+# Run unit tests
+test-unit:
+	@echo "Running unit tests..."
 ifeq ($(HAS_SRC_DIR),yes)
 	@cd $(SRC_DIR) && go test -v ./...
 else
 	@go test -v ./...
 endif
+
+# Run tests (alias for test-unit)
+test: test-unit
+
+# Run all tests (unit + E2E)
+test-all: test-unit e2e
 
 # Format code
 fmt:
@@ -430,27 +438,56 @@ else
 endif
 
 # Build Docker image
-docker:
+docker: docker-build
+
+# Build Docker image (alias)
+docker-build:
 	@echo "Building Docker image..."
 	@docker build -t agent-stop-and-go .
 	@echo "Docker image built: agent-stop-and-go"
 
+# Push Docker image
+docker-push:
+	@echo "Pushing Docker image..."
+	@docker push agent-stop-and-go
+	@echo "Docker image pushed: agent-stop-and-go"
+
 # Run Docker container
-docker-run: docker
+docker-run: docker-build
 	@echo "Running Docker container..."
 	@docker run --rm -p 8080:8080 -v $(PWD)/config:/app/config -e GEMINI_API_KEY=$(GEMINI_API_KEY) -e ANTHROPIC_API_KEY=$(ANTHROPIC_API_KEY) agent-stop-and-go
 
 # Start multi-agent Docker Compose stack
-compose-up:
+run-up:
 	@mkdir -p logs
 	@export LOG_SESSION=$$(date +%Y%m%d%H%M%S)_$$(openssl rand -hex 4); \
 	echo "Log session: $$LOG_SESSION (logs/ directory)"; \
 	LOG_SESSION=$$LOG_SESSION docker-compose up --build
 
+compose-up: run-up
+
 # Stop multi-agent Docker Compose stack
-compose-down:
+run-down:
 	@echo "Stopping Docker Compose stack..."
 	@docker-compose down
+
+compose-down: run-down
+
+# Initialize Go module (only if go.mod doesn't exist)
+init-mod:
+	@if [ ! -f $(GO_MOD_PATH) ]; then \
+		echo "Initializing Go module..."; \
+		go mod init $(DEFAULT_BINARY_NAME); \
+	else \
+		echo "go.mod already exists"; \
+	fi
+
+# Install/update dependencies
+init-deps:
+	@echo "Installing dependencies..."
+	@go mod download
+	@go mod tidy
+	@echo "Dependencies installed"
 
 # Run E2E tests (requires GEMINI_API_KEY and built binaries)
 e2e: build
@@ -477,17 +514,28 @@ help:
 	@echo "  build            - Build binaries for current platform ($(CURRENT_PLATFORM))"
 	@echo "  build-all        - Build for all platforms and create launcher scripts"
 	@echo "  run              - Build and run the binary"
-	@echo "  rebuild          - Clean all and rebuild from scratch"
+	@echo "  rebuild          - Clean and rebuild"
+	@echo "  rebuild-all      - Clean all (including go.mod/go.sum) and rebuild"
 	@echo "  install          - Install current platform binaries (root: /usr/local/bin, user: ~/.local/bin, or TARGET)"
 	@echo "  install-launcher - Install launcher scripts with all platform binaries"
 	@echo "  uninstall        - Remove installed binaries"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  clean-all        - Remove build artifacts, go.mod, and go.sum"
-	@echo "  test             - Run tests"
+	@echo "  test             - Run unit tests"
+	@echo "  test-unit        - Run unit tests"
+	@echo "  test-all         - Run all tests (unit + E2E)"
+	@echo "  e2e              - Run E2E tests (requires GEMINI_API_KEY)"
 	@echo "  fmt              - Format code"
 	@echo "  vet              - Run go vet"
 	@echo "  lint             - Run golangci-lint (or go vet if not installed)"
 	@echo "  check            - Run fmt, vet, lint, and test"
+	@echo "  docker-build     - Build Docker image"
+	@echo "  docker-push      - Push Docker image"
+	@echo "  docker-run       - Build and run Docker container"
+	@echo "  run-up           - Start Docker Compose stack"
+	@echo "  run-down         - Stop Docker Compose stack"
+	@echo "  init-mod         - Initialize Go module"
+	@echo "  init-deps        - Install/update dependencies"
 	@echo "  list-commands    - List all available commands (multi-command projects)"
 	@echo "  info             - Show current platform and project information"
 	@echo "  help             - Show this help message"

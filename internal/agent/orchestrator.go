@@ -272,7 +272,7 @@ func (a *Agent) executeLLMNode(ctx context.Context, node *config.AgentNode, stat
 		{Role: "user", Content: userMessage},
 	}
 
-	response, err := llmClient.GenerateWithTools(prompt, messages, tools)
+	response, err := llmClient.GenerateWithTools(ctx, prompt, messages, tools)
 	if err != nil {
 		errorMsg := fmt.Sprintf("[%s] LLM error: %v", node.Name, err)
 		conv.AddMessage(conversation.RoleAssistant, errorMsg)

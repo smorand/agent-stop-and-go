@@ -91,7 +91,7 @@ type claudeError struct {
 }
 
 // GenerateWithTools sends a request to Claude with tool use support.
-func (c *ClaudeClient) GenerateWithTools(systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error) {
+func (c *ClaudeClient) GenerateWithTools(ctx context.Context, systemPrompt string, messages []Message, tools []mcp.Tool) (*Response, error) {
 	// Convert MCP tools to Claude tool format
 	claudeTools := make([]claudeTool, 0, len(tools))
 	for _, tool := range tools {
@@ -151,7 +151,7 @@ func (c *ClaudeClient) GenerateWithTools(systemPrompt string, messages []Message
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(context.Background(), "POST", claudeBaseURL, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", claudeBaseURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
