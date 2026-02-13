@@ -18,14 +18,42 @@ type LLMConfig struct {
 	Model string `yaml:"model"`
 }
 
+// A2AAgent holds the configuration for an A2A sub-agent.
+type A2AAgent struct {
+	Name            string `yaml:"name"`
+	URL             string `yaml:"url"`
+	Description     string `yaml:"description"`
+	DestructiveHint bool   `yaml:"destructiveHint"`
+}
+
+// AgentNode defines a node in the agent orchestration tree.
+type AgentNode struct {
+	Name            string      `yaml:"name"`
+	Type            string      `yaml:"type"`                      // llm, sequential, parallel, loop, a2a
+	Model           string      `yaml:"model,omitempty"`           // llm: Gemini model name
+	Prompt          string      `yaml:"prompt,omitempty"`          // llm: system prompt, a2a: message template
+	OutputKey       string      `yaml:"output_key,omitempty"`      // key to store output in session state
+	CanExitLoop     bool        `yaml:"can_exit_loop,omitempty"`   // llm: gets exit_loop tool
+	MaxIterations   int         `yaml:"max_iterations,omitempty"`  // loop: max iterations (0 = 10 safety cap)
+	Agents          []AgentNode `yaml:"agents,omitempty"`          // sequential, parallel, loop: sub-agents
+	URL             string      `yaml:"url,omitempty"`             // a2a: remote agent URL
+	Description     string      `yaml:"description,omitempty"`     // a2a: agent description
+	DestructiveHint bool        `yaml:"destructiveHint,omitempty"` // a2a: requires approval
+	A2A             []A2AAgent  `yaml:"a2a,omitempty"`             // llm: local A2A tools
+}
+
 // Config holds the agent configuration loaded from agent.yaml.
 type Config struct {
-	Prompt  string    `yaml:"prompt"`
-	Host    string    `yaml:"host"`
-	Port    int       `yaml:"port"`
-	DataDir string    `yaml:"data_dir"`
-	LLM     LLMConfig `yaml:"llm"`
-	MCP     MCPConfig `yaml:"mcp"`
+	Name        string     `yaml:"name"`
+	Description string     `yaml:"description"`
+	Prompt      string     `yaml:"prompt"`
+	Host        string     `yaml:"host"`
+	Port        int        `yaml:"port"`
+	DataDir     string     `yaml:"data_dir"`
+	LLM         LLMConfig  `yaml:"llm"`
+	MCP         MCPConfig  `yaml:"mcp"`
+	A2A         []A2AAgent `yaml:"a2a"`
+	Agent       *AgentNode `yaml:"agent,omitempty"` // Agent tree (overrides top-level prompt/llm/a2a)
 }
 
 // Load reads and parses the agent.yaml configuration file.
@@ -40,6 +68,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	if cfg.Name == "" {
+		cfg.Name = "agent"
+	}
 	if cfg.Host == "" {
 		cfg.Host = "0.0.0.0"
 	}
@@ -51,6 +82,17 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.LLM.Model == "" {
 		cfg.LLM.Model = "gemini-2.5-flash"
+	}
+
+	// Synthesize default agent node from top-level fields when agent tree is not defined
+	if cfg.Agent == nil {
+		cfg.Agent = &AgentNode{
+			Type:   "llm",
+			Name:   cfg.Name,
+			Model:  cfg.LLM.Model,
+			Prompt: cfg.Prompt,
+			A2A:    cfg.A2A,
+		}
 	}
 
 	return &cfg, nil

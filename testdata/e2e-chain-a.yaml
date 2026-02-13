@@ -1,0 +1,36 @@
+name: orchestrator-a
+description: Orchestrator agent with A2A delegation for E2E chain test.
+
+host: 0.0.0.0
+port: 9091
+data_dir: ./data/e2e_test_chain_a
+
+llm:
+  model: gemini-3-flash-preview
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/e2e_test_chain_a/resources.db
+
+agent:
+  name: pipeline
+  type: sequential
+  agents:
+    - name: analyzer
+      type: llm
+      model: gemini-3-flash-preview
+      output_key: analysis
+      prompt: |
+        You are an intent analyzer. Read the user's request and output a single line.
+        - For list/show/search: output "list all resources"
+        - For add/create: output "add resource NAME with value NUMBER" (extract name and number)
+        - For remove/delete: output "remove resource NAME"
+        Output ONLY the action line, nothing else.
+    - name: delegator
+      type: a2a
+      url: http://localhost:9092/a2a
+      description: "Backend resource management agent"
+      prompt: "{analysis}"
+      output_key: result

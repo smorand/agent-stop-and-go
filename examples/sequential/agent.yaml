@@ -1,0 +1,49 @@
+name: sequential-pipeline
+description: A sequential agent that first analyzes a request, then executes the appropriate action.
+
+host: 0.0.0.0
+port: 8080
+data_dir: ./data
+
+llm:
+  model: gemini-2.5-flash
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/resources.db
+
+# Sequential pipeline: analyze intent first, then execute
+agent:
+  name: resource-pipeline
+  type: sequential
+  agents:
+    - name: analyzer
+      type: llm
+      model: gemini-2.5-flash
+      output_key: analysis
+      prompt: |
+        You are a request analyzer. Analyze the user's request and output a structured summary.
+        Respond with a short analysis in this format:
+        - Intent: (list, add, remove)
+        - Target: (resource name or pattern)
+        - Details: (any additional info like value)
+
+        Do NOT execute any action. Only analyze.
+
+    - name: executor
+      type: llm
+      model: gemini-2.5-flash
+      output_key: result
+      prompt: |
+        You are a resource executor. Based on the following analysis, execute the appropriate action using tools.
+
+        Analysis: {analysis}
+
+        Execute the action described in the analysis using the available tools.
+        - For "list" intent: call resources_list
+        - For "add" intent: call resources_add with name and value
+        - For "remove" intent: call resources_remove with id or pattern
+
+        Execute immediately, do not ask for confirmation.

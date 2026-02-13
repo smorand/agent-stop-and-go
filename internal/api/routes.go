@@ -19,4 +19,8 @@ func (s *Server) setupRoutes() {
 
 	// Approval routes
 	s.app.Post("/approvals/:uuid", s.resolveApprovalHandler)
+
+	// A2A server routes
+	s.app.Get("/.well-known/agent.json", s.agentCardHandler)
+	s.app.Post("/a2a", s.a2aHandler)
 }

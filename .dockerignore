@@ -1,0 +1,9 @@
+bin/
+data/
+logs/
+.git/
+.gitignore
+*.md
+.agent_docs/
+.vscode/
+.idea/

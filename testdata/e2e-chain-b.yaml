@@ -1,3 +1,19 @@
+name: resource-agent-b
+description: Backend resource agent with MCP tools for A2A chain E2E test.
+
+host: 0.0.0.0
+port: 9092
+data_dir: ./data/e2e_test_chain_b
+
+llm:
+  model: gemini-3-flash-preview
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/e2e_test_chain_b/resources.db
+
 prompt: |
   You are a resource management agent. You MUST use tools to perform operations.
 
@@ -11,16 +27,3 @@ prompt: |
   - LIST/SEARCH/SHOW: Call resources_list, optionally with pattern
 
   If the request is unclear or doesn't match these operations, explain what you can do.
-
-host: 0.0.0.0
-port: 8080
-data_dir: ./data
-
-llm:
-  model: gemini-2.5-flash
-
-mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/resources.db

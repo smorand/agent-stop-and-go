@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "agent.yaml", "path to agent configuration file")
+	configPath := flag.String("config", "config/agent.yaml", "path to agent configuration file")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

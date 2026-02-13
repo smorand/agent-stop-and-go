@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -44,29 +45,43 @@ type ToolCall struct {
 
 // PendingApproval represents a tool call waiting for external approval.
 type PendingApproval struct {
-	UUID           string         `json:"uuid"`
-	ConversationID string         `json:"conversation_id"`
-	ToolName       string         `json:"tool_name"`
-	ToolArgs       map[string]any `json:"tool_args"`
-	Description    string         `json:"description"`
-	CreatedAt      time.Time      `json:"created_at"`
+	UUID            string         `json:"uuid"`
+	ConversationID  string         `json:"conversation_id"`
+	ToolName        string         `json:"tool_name"`
+	ToolArgs        map[string]any `json:"tool_args"`
+	Description     string         `json:"description"`
+	RemoteTaskID    string         `json:"remote_task_id,omitempty"`
+	RemoteAgentName string         `json:"remote_agent_name,omitempty"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
+// PipelineState stores the orchestration state when a pipeline pauses for approval.
+type PipelineState struct {
+	PausedNodePath      []int             `json:"paused_node_path"`
+	PausedNodeOutputKey string            `json:"paused_node_output_key"`
+	SessionState        map[string]string `json:"session_state"`
+	UserMessage         string            `json:"user_message"`
 }
 
 // Conversation represents a chat session with the agent.
 type Conversation struct {
+	mu              sync.Mutex       `json:"-"`
 	ID              string           `json:"id"`
+	SessionID       string           `json:"session_id,omitempty"`
 	Status          Status           `json:"status"`
 	Messages        []Message        `json:"messages"`
 	PendingApproval *PendingApproval `json:"pending_approval,omitempty"`
+	PipelineState   *PipelineState   `json:"pipeline_state,omitempty"`
 	CreatedAt       time.Time        `json:"created_at"`
 	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
-// New creates a new conversation with a system prompt.
-func New(systemPrompt string) *Conversation {
+// New creates a new conversation with a system prompt and session ID.
+func New(systemPrompt, sessionID string) *Conversation {
 	now := time.Now()
 	conv := &Conversation{
 		ID:        uuid.New().String(),
+		SessionID: sessionID,
 		Status:    StatusActive,
 		Messages:  []Message{},
 		CreatedAt: now,
@@ -87,6 +102,9 @@ func New(systemPrompt string) *Conversation {
 
 // AddMessage appends a new message to the conversation.
 func (c *Conversation) AddMessage(role Role, content string) Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	msg := Message{
 		ID:        uuid.New().String(),
 		Role:      role,
@@ -100,6 +118,9 @@ func (c *Conversation) AddMessage(role Role, content string) Message {
 
 // AddToolCall appends a tool call message to the conversation.
 func (c *Conversation) AddToolCall(name string, args map[string]any) Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	msg := Message{
 		ID:   uuid.New().String(),
 		Role: RoleAssistant,
@@ -116,6 +137,9 @@ func (c *Conversation) AddToolCall(name string, args map[string]any) Message {
 
 // AddToolResult appends a tool result message to the conversation.
 func (c *Conversation) AddToolResult(name string, result string, isError bool) Message {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	msg := Message{
 		ID:   uuid.New().String(),
 		Role: RoleTool,

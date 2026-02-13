@@ -1,0 +1,51 @@
+name: parallel-gatherer
+description: A parallel agent that gathers information from multiple sources simultaneously.
+
+host: 0.0.0.0
+port: 8080
+data_dir: ./data
+
+llm:
+  model: gemini-2.5-flash
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/resources.db
+
+# Parallel pipeline: gather multiple views of data at once, then summarize
+agent:
+  name: gather-and-summarize
+  type: sequential
+  agents:
+    - name: parallel-gather
+      type: parallel
+      agents:
+        - name: list-all
+          type: llm
+          model: gemini-2.5-flash
+          output_key: all_resources
+          prompt: |
+            List all resources using the resources_list tool. Return the raw result.
+
+        - name: count-analysis
+          type: llm
+          model: gemini-2.5-flash
+          output_key: count_info
+          prompt: |
+            List all resources using the resources_list tool. Then count how many resources
+            exist and provide a brief count summary like "Total: N resources found."
+
+    - name: summarizer
+      type: llm
+      model: gemini-2.5-flash
+      output_key: summary
+      prompt: |
+        You are a data summarizer. Based on the following information gathered in parallel,
+        provide a clear summary to the user.
+
+        All resources: {all_resources}
+        Count information: {count_info}
+
+        Provide a well-formatted summary of the current state of resources.

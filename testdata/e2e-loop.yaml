@@ -1,0 +1,32 @@
+name: test-loop
+description: E2E test loop pipeline
+
+host: 0.0.0.0
+port: 9091
+data_dir: ./data/e2e_test_loop
+
+llm:
+  model: gemini-3-flash-preview
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/e2e_test_loop/resources.db
+
+agent:
+  name: resource-filler
+  type: loop
+  max_iterations: 5
+  agents:
+    - name: checker
+      type: llm
+      model: gemini-3-flash-preview
+      can_exit_loop: true
+      prompt: |
+        You are a resource checker. Follow these steps exactly:
+        1. Call resources_list to see current resources
+        2. If there are 2 or more resources, call exit_loop immediately
+        3. If there are fewer than 2 resources, call resources_add with name="auto-N" (where N is a random number) and value=100
+
+        Important: Call exit_loop as SOON as you see 2 or more resources. Do not add more.

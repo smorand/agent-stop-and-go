@@ -1,0 +1,46 @@
+services:
+  agent-b:
+    build: .
+    command: >
+      sh -c "/app/bin/agent --config /app/config/agent-b.yaml 2>&1
+      | tee /logs/${LOG_SESSION}_agent-b.log"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - agent-b-data:/app/data/agent-b
+      - ./logs:/logs
+    expose:
+      - "8082"
+
+  agent-a:
+    build: .
+    command: >
+      sh -c "/app/bin/agent --config /app/config/agent-a.yaml 2>&1
+      | tee /logs/${LOG_SESSION}_agent-a.log"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    ports:
+      - "8080:8080"
+    volumes:
+      - agent-a-data:/app/data/agent-a
+      - ./logs:/logs
+    depends_on:
+      - agent-b
+
+  web:
+    build: .
+    command: >
+      sh -c "/app/bin/web --config /app/config/web-compose.yaml 2>&1
+      | tee /logs/${LOG_SESSION}_web.log"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./logs:/logs
+    depends_on:
+      - agent-a
+
+volumes:
+  agent-a-data:
+  agent-b-data:

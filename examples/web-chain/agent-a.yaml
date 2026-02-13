@@ -1,0 +1,30 @@
+name: orchestrator-agent-a
+description: Orchestrator agent that delegates to Agent B via A2A (Agent A in chain).
+
+prompt: |
+  You are an orchestrator agent. You delegate ALL resource operations to the resource-agent.
+
+  When the user asks to list, add, create, remove, or delete resources:
+  - Call the a2a_resource-agent tool with the user's request as the message
+
+  Do NOT try to handle operations yourself. Always delegate to the resource-agent.
+
+host: 0.0.0.0
+port: 8080
+data_dir: ./data/web-chain-a
+
+llm:
+  model: gemini-2.5-flash
+
+# Dummy MCP (required by framework, but Agent A doesn't use tools directly)
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/web-chain-a/resources.db
+
+a2a:
+  - name: resource-agent
+    url: http://localhost:8082/a2a
+    description: "Backend resource management agent. Delegate all resource operations to this agent."
+    destructiveHint: false

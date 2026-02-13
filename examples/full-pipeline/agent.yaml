@@ -1,0 +1,95 @@
+name: full-pipeline-agent
+description: A complex agent combining sequential, parallel, loop, and A2A patterns.
+
+host: 0.0.0.0
+port: 8080
+data_dir: ./data
+
+llm:
+  model: gemini-2.5-flash
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/resources.db
+
+# Full pipeline: sequential with nested parallel and loop
+agent:
+  name: full-pipeline
+  type: sequential
+  agents:
+    # Step 1: Analyze the user request
+    - name: intent-analyzer
+      type: llm
+      model: gemini-2.5-flash
+      output_key: intent
+      prompt: |
+        You are an intent classifier. Analyze the user's message and classify it into
+        one of these categories:
+        - QUERY: user wants to list, search, or get information about resources
+        - MUTATE: user wants to add, create, remove, or delete resources
+        - STATUS: user wants a summary or report of the current state
+
+        Respond with ONLY the category name (QUERY, MUTATE, or STATUS) followed by
+        a brief description of what the user wants.
+
+    # Step 2: Gather context in parallel
+    - name: context-gather
+      type: parallel
+      agents:
+        - name: current-state
+          type: llm
+          model: gemini-2.5-flash
+          output_key: current_resources
+          prompt: |
+            List all current resources using the resources_list tool.
+            Return the raw result.
+
+        - name: request-enricher
+          type: llm
+          model: gemini-2.5-flash
+          output_key: enriched_request
+          prompt: |
+            Given this intent analysis: {intent}
+
+            Enrich the request with additional context. If the intent mentions
+            specific resource names or values, extract them. If not, suggest
+            reasonable defaults. Format your response as:
+            - Action: (what to do)
+            - Resource: (name if applicable)
+            - Value: (value if applicable)
+            - Notes: (any additional context)
+
+    # Step 3: Execute based on gathered context
+    - name: executor
+      type: llm
+      model: gemini-2.5-flash
+      output_key: execution_result
+      prompt: |
+        You are the execution agent. Based on the following context, perform the appropriate action.
+
+        Intent: {intent}
+        Current resources: {current_resources}
+        Enriched request: {enriched_request}
+
+        Execute the appropriate tool:
+        - For QUERY intents: use resources_list (possibly with a pattern)
+        - For MUTATE intents: use resources_add or resources_remove as needed
+        - For STATUS intents: use resources_list and provide a summary
+
+        Execute immediately using tools. Do not ask for confirmation.
+
+    # Step 4: Generate final response
+    - name: response-formatter
+      type: llm
+      model: gemini-2.5-flash
+      prompt: |
+        You are a response formatter. Based on all the work done by the pipeline,
+        create a clear, user-friendly response.
+
+        Original intent: {intent}
+        Execution result: {execution_result}
+
+        Provide a concise, helpful response to the user. Do not mention internal
+        pipeline steps or technical details.

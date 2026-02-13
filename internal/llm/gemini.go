@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"agent-stop-and-go/internal/mcp"
 )
@@ -30,40 +31,22 @@ func NewGeminiClient(model string) (*GeminiClient, error) {
 	return &GeminiClient{
 		model:  model,
 		apiKey: apiKey,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 60 * time.Second},
 	}, nil
-}
-
-// Message represents a conversation message.
-type Message struct {
-	Role    string `json:"role"` // "user" or "model"
-	Content string `json:"content"`
-}
-
-// ToolCall represents a function call from the LLM.
-type ToolCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-// Response represents the LLM response.
-type Response struct {
-	Text     string    `json:"text,omitempty"`
-	ToolCall *ToolCall `json:"tool_call,omitempty"`
 }
 
 // Gemini API request/response types
 
 type geminiRequest struct {
-	Contents          []geminiContent        `json:"contents"`
-	Tools             []geminiTool           `json:"tools,omitempty"`
-	SystemInstruction *geminiContent         `json:"systemInstruction,omitempty"`
-	ToolConfig        *geminiToolConfig      `json:"toolConfig,omitempty"`
+	Contents          []geminiContent   `json:"contents"`
+	Tools             []geminiTool      `json:"tools,omitempty"`
+	SystemInstruction *geminiContent    `json:"systemInstruction,omitempty"`
+	ToolConfig        *geminiToolConfig `json:"toolConfig,omitempty"`
 }
 
 type geminiContent struct {
-	Role  string        `json:"role,omitempty"`
-	Parts []geminiPart  `json:"parts"`
+	Role  string       `json:"role,omitempty"`
+	Parts []geminiPart `json:"parts"`
 }
 
 type geminiPart struct {
@@ -81,15 +64,15 @@ type geminiTool struct {
 }
 
 type geminiFunctionDecl struct {
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Parameters  *geminiParameters   `json:"parameters,omitempty"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Parameters  *geminiParameters `json:"parameters,omitempty"`
 }
 
 type geminiParameters struct {
-	Type       string                     `json:"type"`
-	Properties map[string]geminiProperty  `json:"properties,omitempty"`
-	Required   []string                   `json:"required,omitempty"`
+	Type       string                    `json:"type"`
+	Properties map[string]geminiProperty `json:"properties,omitempty"`
+	Required   []string                  `json:"required,omitempty"`
 }
 
 type geminiProperty struct {

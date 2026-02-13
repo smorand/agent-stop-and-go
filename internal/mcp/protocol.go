@@ -57,10 +57,10 @@ type ServerInfo struct {
 
 // Tool represents an MCP tool definition.
 type Tool struct {
-	Name            string     `json:"name"`
-	Description     string     `json:"description"`
+	Name            string      `json:"name"`
+	Description     string      `json:"description"`
 	InputSchema     InputSchema `json:"inputSchema"`
-	DestructiveHint bool       `json:"destructiveHint,omitempty"`
+	DestructiveHint bool        `json:"destructiveHint,omitempty"`
 }
 
 // InputSchema defines the JSON schema for tool inputs.

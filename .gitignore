@@ -1,8 +1,13 @@
 # Binary
-bin
+bin/
+/web
+/agent
 
 # Data directory (runtime conversations)
 data/
+
+# Docker Compose logs
+logs/
 
 # Go build artifacts
 *.exe

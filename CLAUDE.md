@@ -2,45 +2,63 @@
 
 ## Overview
 
-Generic API for async autonomous agents with MCP tool support and approval workflows. Agents can pause execution and wait for external approval before proceeding with destructive actions.
+Generic API for async autonomous agents with MCP tool support, A2A sub-agent delegation, and approval workflows. Agents can pause execution and wait for external approval before proceeding with destructive actions.
 
 ## Tech Stack
 
 - **Language**: Go 1.23
 - **Web Framework**: Fiber
-- **LLM**: Gemini 2.5 Flash (generativelanguage API)
+- **LLM**: Gemini / Claude (multi-provider: `claude-*` → Anthropic, others → Gemini)
 - **MCP Protocol**: JSON-RPC 2.0 over stdio
+- **A2A Protocol**: JSON-RPC 2.0 over HTTPS
 - **Config**: YAML (gopkg.in/yaml.v3)
 - **Storage**: JSON files (conversations), SQLite (MCP resources)
 - **Build**: Make
+- **Container**: Docker
 
 ## Environment Variables
 
-- `GEMINI_API_KEY`: Required. API key for Gemini LLM.
+- `GEMINI_API_KEY`: Required for Gemini models (default). API key for Gemini LLM.
+- `ANTHROPIC_API_KEY`: Required for Claude models. API key for Anthropic Claude.
 
 ## Key Commands
 
 ```bash
-make build      # Build both binaries for current platform
-make run        # Build and run API on port 8080
-make test       # Run tests
-make check      # Run all checks (fmt, vet, lint, test)
+make build        # Build both binaries for current platform
+make run          # Build and run API on port 8080
+make test         # Run tests
+make check        # Run all checks (fmt, vet, lint, test)
+make e2e          # Run E2E tests (requires GEMINI_API_KEY)
+make docker       # Build Docker image
+make docker-run   # Run Docker container (single agent)
+make compose-up   # Start multi-agent Docker Compose stack
+make compose-down # Stop Docker Compose stack
 ```
 
 ## Project Structure
 
 ```
+config/
+├── agent.yaml                    # Default single-agent config
+├── web.yaml                      # Web frontend config (local dev)
+├── agent-a.yaml                  # Docker Compose: orchestrator
+├── agent-b.yaml                  # Docker Compose: resource agent
+└── web-compose.yaml              # Docker Compose: web frontend
 cmd/
-├── agent-stop-and-go/main.go     # API entry point
+├── agent/main.go                 # API entry point
+├── web/main.go                   # Web chat (A2A-only frontend)
 └── mcp-resources/main.go         # MCP server (SQLite resources)
 internal/
 ├── api/                          # HTTP handlers (Fiber)
-├── agent/                        # Agent logic with LLM + MCP
-├── llm/                          # Gemini LLM client
-├── mcp/                          # MCP client (JSON-RPC)
+├── agent/                        # Agent logic with LLM + MCP + A2A + orchestration
+├── llm/                          # Multi-provider LLM clients (60s timeout)
+├── mcp/                          # MCP client (JSON-RPC over stdio)
+├── a2a/                          # A2A client (JSON-RPC over HTTPS)
+├── auth/                         # Bearer token context propagation
 ├── config/                       # YAML config loader
 ├── conversation/                 # Data models with tool calls
 └── storage/                      # JSON file persistence
+testdata/                             # E2E orchestration test configs
 ```
 
 ## API Routes
@@ -48,24 +66,37 @@ internal/
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /docs | Interactive HTML documentation |
-| GET | /tools | List available MCP tools |
+| GET | /tools | List available MCP tools + A2A agents |
 | GET | /health | Health check |
 | POST | /conversations | Start new conversation |
 | GET | /conversations | List all conversations |
 | GET | /conversations/:id | Get conversation |
 | POST | /conversations/:id/messages | Send message (may trigger tool) |
 | POST | /approvals/:uuid | Approve or reject pending action |
+| GET | /.well-known/agent.json | A2A Agent Card (discovery) |
+| POST | /a2a | A2A JSON-RPC endpoint (message/send, tasks/get) |
 
 ## Key Concepts
 
-- **MCP Server**: External binary providing tools via JSON-RPC
-- **destructiveHint**: Tool property indicating approval requirement
+- **MCP Server**: External binary providing tools via JSON-RPC over stdio
+- **A2A Agents**: Remote agents accessible via JSON-RPC over HTTPS
+- **destructiveHint**: Tool/agent property indicating approval requirement
 - **Conversation Status**: `active`, `waiting_approval`, `completed`
-- **Approval Flow**: Tools with `destructiveHint=true` require explicit approval
+- **Approval Flow**: Tools/agents with `destructiveHint=true` require explicit approval
+- **Auth Forwarding**: `Authorization: Bearer` tokens are forwarded to A2A agents
+- **Session ID**: 8-char hex ID generated per conversation at the entry point, propagated via `X-Session-ID` header to A2A agents, stored in `Conversation.SessionID`, and logged as `sid=` in request logs for cross-agent tracing
+- **Agent Tree**: Orchestration tree with `sequential`, `parallel`, `loop`, `llm`, `a2a` node types
+- **Session State**: `output_key` stores node output, `{placeholder}` resolves in prompts
+- **Pipeline Pause/Resume**: Sequential pipelines pause on approval and resume from the paused node
 
-## Configuration (agent.yaml)
+## Configuration (config/agent.yaml)
+
+### Simple mode (single LLM, backward compatible)
 
 ```yaml
+name: resource-manager        # Agent name for A2A Agent Card (default: "agent")
+description: "Agent desc"     # Agent description for A2A Agent Card
+
 prompt: |
   System prompt for the agent...
 
@@ -74,14 +105,60 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash
+  model: gemini-2.5-flash    # or claude-sonnet-4-5-20250929 for Claude
 
 mcp:
   command: ./bin/mcp-resources
   args:
     - --db
     - ./data/resources.db
+
+a2a:
+  - name: summarizer
+    url: https://summarizer.example.com
+    description: "Summarizes texts"
+    destructiveHint: false
 ```
+
+### Orchestrated mode (agent tree)
+
+When `agent` key is present, the tree-based orchestrator is used:
+
+```yaml
+mcp:
+  command: ./bin/mcp-resources
+  args: [--db, ./data/resources.db]
+
+agent:
+  name: pipeline
+  type: sequential          # sequential | parallel | loop | llm | a2a
+  agents:
+    - name: analyzer
+      type: llm
+      model: gemini-2.5-flash
+      output_key: analysis    # stores output in session state
+      prompt: "Analyze: ..."
+    - name: executor
+      type: llm
+      model: gemini-2.5-flash
+      prompt: "Execute based on {analysis}"  # {placeholder} resolves from session state
+```
+
+### Agent node fields
+
+| Field | Types | Description |
+|-------|-------|-------------|
+| `name` | all | Node identifier |
+| `type` | all | `llm`, `sequential`, `parallel`, `loop`, `a2a` |
+| `agents` | sequential, parallel, loop | Sub-agent list |
+| `model` | llm | LLM model — `claude-*` for Anthropic, others for Gemini (defaults to `llm.model`) |
+| `prompt` | llm, a2a | System prompt / message template with `{placeholders}` |
+| `output_key` | llm, a2a | Key to store output in session state |
+| `can_exit_loop` | llm | Gives the node an `exit_loop` tool |
+| `max_iterations` | loop | Max iterations (default: 10 safety cap) |
+| `url` | a2a | Remote agent URL |
+| `destructiveHint` | a2a | Requires approval |
+| `a2a` | llm | Per-node A2A tools for LLM decision |
 
 ## MCP Tools (mcp-resources)
 
@@ -91,22 +168,59 @@ mcp:
 | resources_remove | Remove resources | true |
 | resources_list | List/search resources | false |
 
+## A2A Integration
+
+### A2A Client (outbound)
+A2A agents are configured in `config/agent.yaml` under the `a2a` section. They appear as synthetic tools to the LLM with the prefix `a2a_` (e.g., `a2a_summarizer`). The LLM naturally picks between MCP tools and A2A agents. Bearer tokens from incoming requests are forwarded to A2A agents.
+
+### A2A Server (inbound)
+The agent exposes itself as an A2A server via `/.well-known/agent.json` (Agent Card) and `POST /a2a` (JSON-RPC 2.0). Other A2A agents can discover skills and send tasks. Task ID = conversation ID. Destructive tasks return `state: "input-required"` until approved via REST or A2A `message/send` with `taskId`.
+
+### Proxy Approval Chain
+When an A2A sub-agent returns `state: "input-required"`, the parent agent creates a proxy `PendingApproval` with `remote_task_id` and `remote_agent_name`. When the proxy is resolved (via REST or `message/send` with `taskId`), the parent forwards the approval to the sub-agent via `message/send` with `taskId`.
+
 ## Approval Flow
 
 ```
 User: "add resource X"
-  → LLM (Gemini) determines intent and calls resources_add
-  → Tool has destructiveHint=true → Create PendingApproval with UUID
+  → LLM determines intent and calls resources_add (or a2a_agent)
+  → destructiveHint=true → Create PendingApproval with UUID
   → Return approval request to client
   → Wait...
 
 POST /approvals/{uuid} { "approved": true }
   # or { "action": "approve" }
   # or { "answer": "yes" }
-  → Execute tool via MCP
+  # or A2A message/send { "taskId": "task-id", "message": {..., "text": "approved"} }
+  → Execute tool via MCP (or delegate to A2A agent)
+  → If proxy: forward message/send with taskId to remote agent
   → Return result
 ```
 
+## Web Chat (cmd/web)
+
+Browser-based chat frontend that communicates with the agent via REST API. Configured via `config/web.yaml`:
+
+```yaml
+agent_url: http://localhost:8080
+host: 0.0.0.0
+port: 3000
+```
+
+Routes: `GET /` (chat UI), `POST /api/send`, `POST /api/approve`, `GET /api/conversation/:id`
+
+## E2E Tests
+
+Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require `GEMINI_API_KEY` and built MCP binary.
+
+- **Core tests** (`e2e_test.go`): Single-agent scenarios on port 9090 (TS-001 to TS-014, TS-020)
+- **Orchestration tests** (`e2e_orchestration_test.go`): Multi-agent orchestration on ports 9091-9092 (TS-022 to TS-028)
+  - Sequential, Parallel, Loop pipelines with MCP tools
+  - A2A chain delegation with proxy approval
+  - Orchestrated pipelines accessed via A2A protocol
+- **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests)
+
 ## Documentation Index
 
-- `.agent_docs/` - Detailed documentation (load on demand)
+- `.agent_docs/golang.md` - Go coding standards and project conventions
+- `.agent_docs/makefile.md` - Makefile targets and build documentation

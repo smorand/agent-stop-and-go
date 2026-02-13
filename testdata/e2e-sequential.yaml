@@ -1,0 +1,44 @@
+name: test-sequential
+description: E2E test sequential pipeline
+
+host: 0.0.0.0
+port: 9091
+data_dir: ./data/e2e_test_seq
+
+llm:
+  model: gemini-3-flash-preview
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/e2e_test_seq/resources.db
+
+agent:
+  name: pipeline
+  type: sequential
+  agents:
+    - name: analyzer
+      type: llm
+      model: gemini-3-flash-preview
+      output_key: analysis
+      prompt: |
+        You are an intent analyzer. Read the user's request and output a single line.
+        - For list/show/search: output "list resources"
+        - For add/create: output "add resource NAME with value NUMBER" (extract name and number)
+        - For remove/delete: output "remove resource NAME"
+        Output ONLY the action line, nothing else.
+    - name: executor
+      type: llm
+      model: gemini-3-flash-preview
+      prompt: |
+        Execute the action described below using the appropriate tool.
+
+        Action: {analysis}
+
+        Rules:
+        - "list resources" → call resources_list
+        - "add resource X with value Y" → call resources_add with name=X, value=Y (value must be an integer)
+        - "remove resource X" → call resources_remove with pattern=X
+
+        Call the tool immediately without asking for confirmation.

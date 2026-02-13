@@ -1,4 +1,4 @@
-.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild test fmt vet lint check run info help list-commands
+.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild test fmt vet lint check run info help list-commands docker docker-run compose-up compose-down e2e
 
 # Detect current platform
 GOOS=$(shell go env GOOS)
@@ -428,6 +428,36 @@ ifeq ($(HAS_MULTIPLE_CMDS),yes)
 else
 	@echo "Single-command project: $(DEFAULT_BINARY_NAME)"
 endif
+
+# Build Docker image
+docker:
+	@echo "Building Docker image..."
+	@docker build -t agent-stop-and-go .
+	@echo "Docker image built: agent-stop-and-go"
+
+# Run Docker container
+docker-run: docker
+	@echo "Running Docker container..."
+	@docker run --rm -p 8080:8080 -v $(PWD)/config:/app/config -e GEMINI_API_KEY=$(GEMINI_API_KEY) -e ANTHROPIC_API_KEY=$(ANTHROPIC_API_KEY) agent-stop-and-go
+
+# Start multi-agent Docker Compose stack
+compose-up:
+	@mkdir -p logs
+	@export LOG_SESSION=$$(date +%Y%m%d%H%M%S)_$$(openssl rand -hex 4); \
+	echo "Log session: $$LOG_SESSION (logs/ directory)"; \
+	LOG_SESSION=$$LOG_SESSION docker-compose up --build
+
+# Stop multi-agent Docker Compose stack
+compose-down:
+	@echo "Stopping Docker Compose stack..."
+	@docker-compose down
+
+# Run E2E tests (requires GEMINI_API_KEY and built binaries)
+e2e: build
+	@echo "Setting up MCP binary symlink..."
+	@ln -sf mcp-resources-$(CURRENT_PLATFORM) $(BUILD_DIR)/mcp-resources
+	@echo "Running E2E tests..."
+	@go test -v -tags=e2e -timeout 300s ./...
 
 # Show current platform info
 info:

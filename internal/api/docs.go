@@ -6,33 +6,33 @@ import (
 
 // APISpec represents the API specification.
 type APISpec struct {
-	Title       string      `json:"title"`
-	Description string      `json:"description"`
-	Version     string      `json:"version"`
-	Endpoints   []Endpoint  `json:"endpoints"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Version     string     `json:"version"`
+	Endpoints   []Endpoint `json:"endpoints"`
 }
 
 // Endpoint represents an API endpoint specification.
 type Endpoint struct {
-	Method      string            `json:"method"`
-	Path        string            `json:"path"`
-	Summary     string            `json:"summary"`
-	Description string            `json:"description"`
-	Request     *RequestSpec      `json:"request,omitempty"`
+	Method      string              `json:"method"`
+	Path        string              `json:"path"`
+	Summary     string              `json:"summary"`
+	Description string              `json:"description"`
+	Request     *RequestSpec        `json:"request,omitempty"`
 	Responses   map[string]Response `json:"responses"`
 }
 
 // RequestSpec represents request body specification.
 type RequestSpec struct {
-	ContentType string            `json:"content_type"`
-	Schema      map[string]Field  `json:"schema"`
-	Example     any       `json:"example,omitempty"`
+	ContentType string           `json:"content_type"`
+	Schema      map[string]Field `json:"schema"`
+	Example     any              `json:"example,omitempty"`
 }
 
 // Response represents a response specification.
 type Response struct {
-	Description string      `json:"description"`
-	Example     any `json:"example,omitempty"`
+	Description string `json:"description"`
+	Example     any    `json:"example,omitempty"`
 }
 
 // Field represents a schema field.
@@ -176,6 +176,71 @@ func getAPISpec() APISpec {
 					"404": {
 						Description: "Conversation not found",
 						Example:     map[string]string{"error": "conversation not found"},
+					},
+				},
+			},
+			{
+				Method:      "GET",
+				Path:        "/.well-known/agent.json",
+				Summary:     "Agent Card (A2A)",
+				Description: "Returns the A2A Agent Card describing the agent's identity and skills. Used by other A2A agents for discovery.",
+				Responses: map[string]Response{
+					"200": {
+						Description: "Agent card with skills",
+						Example: map[string]any{
+							"name":        "resource-manager",
+							"description": "A resource management agent",
+							"url":         "http://0.0.0.0:8080",
+							"skills": []map[string]string{
+								{"id": "resources_list", "name": "resources_list", "description": "List resources"},
+							},
+						},
+					},
+				},
+			},
+			{
+				Method:      "POST",
+				Path:        "/a2a",
+				Summary:     "A2A JSON-RPC Endpoint",
+				Description: "JSON-RPC 2.0 endpoint for A2A protocol. Supports methods: message/send (send a message and get a task result, or continue an existing task with taskId), and tasks/get (retrieve a task by ID).",
+				Request: &RequestSpec{
+					ContentType: "application/json",
+					Schema: map[string]Field{
+						"jsonrpc": {Type: "string", Description: "Must be \"2.0\"", Required: true},
+						"id":      {Type: "integer", Description: "Request ID", Required: true},
+						"method":  {Type: "string", Description: "\"message/send\" or \"tasks/get\"", Required: true},
+						"params":  {Type: "object", Description: "Method-specific parameters", Required: true},
+					},
+					Example: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      1,
+						"method":  "message/send",
+						"params": map[string]any{
+							"message": map[string]any{
+								"role": "user",
+								"parts": []map[string]string{
+									{"type": "text", "text": "list resources"},
+								},
+							},
+						},
+					},
+				},
+				Responses: map[string]Response{
+					"200": {
+						Description: "JSON-RPC response with task result",
+						Example: map[string]any{
+							"jsonrpc": "2.0",
+							"id":      1,
+							"result": map[string]any{
+								"id":     "task-uuid",
+								"status": map[string]string{"state": "completed"},
+								"artifact": map[string]any{
+									"parts": []map[string]string{
+										{"type": "text", "text": "Operation result..."},
+									},
+								},
+							},
+						},
 					},
 				},
 			},

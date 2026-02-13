@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
+	"agent-stop-and-go/internal/a2a"
+	"agent-stop-and-go/internal/auth"
 	"agent-stop-and-go/internal/config"
 	"agent-stop-and-go/internal/conversation"
 	"agent-stop-and-go/internal/llm"
@@ -12,19 +16,27 @@ import (
 	"agent-stop-and-go/internal/storage"
 )
 
+const a2aToolPrefix = "a2a_"
+
 // Agent handles the processing of conversations using MCP tools and LLM.
 type Agent struct {
-	config    *config.Config
-	storage   *storage.Storage
-	mcpClient *mcp.Client
-	llmClient *llm.GeminiClient
+	config     *config.Config
+	storage    *storage.Storage
+	mcpClient  *mcp.Client
+	llmClient  llm.Client            // primary client (backward compat)
+	llmClients map[string]llm.Client // model -> client (for orchestrated agents)
+	llmMu      sync.Mutex            // protects llmClients map
+	mcpMu      sync.Mutex            // serializes MCP calls for parallel safety
+	a2aClients map[string]*a2a.Client
 }
 
 // New creates a new agent instance.
 func New(cfg *config.Config, store *storage.Storage) *Agent {
 	return &Agent{
-		config:  cfg,
-		storage: store,
+		config:     cfg,
+		storage:    store,
+		a2aClients: make(map[string]*a2a.Client),
+		llmClients: make(map[string]llm.Client),
 	}
 }
 
@@ -40,15 +52,49 @@ func (a *Agent) Start() error {
 		return fmt.Errorf("failed to start MCP server: %w", err)
 	}
 
-	// Initialize LLM client
-	gemini, err := llm.NewGeminiClient(a.config.LLM.Model)
+	// Initialize primary LLM client
+	llmClient, err := llm.NewClient(a.config.LLM.Model)
 	if err != nil {
 		a.mcpClient.Stop()
 		return fmt.Errorf("failed to initialize LLM client: %w", err)
 	}
-	a.llmClient = gemini
+	a.llmClient = llmClient
+	a.llmClients[a.config.LLM.Model] = llmClient
+
+	// Initialize A2A clients from top-level config
+	for _, agentCfg := range a.config.A2A {
+		client := a2a.NewClient(agentCfg.Name, agentCfg.URL, agentCfg.Description, agentCfg.DestructiveHint)
+		a.a2aClients[agentCfg.Name] = client
+	}
+
+	// Initialize A2A clients from agent tree
+	a.initA2AFromTree(a.config.Agent)
 
 	return nil
+}
+
+// initA2AFromTree walks the agent tree and creates A2A clients for all nodes.
+func (a *Agent) initA2AFromTree(node *config.AgentNode) {
+	if node == nil {
+		return
+	}
+	// Node-level A2A tools (for LLM nodes)
+	for _, agentCfg := range node.A2A {
+		if _, exists := a.a2aClients[agentCfg.Name]; !exists {
+			client := a2a.NewClient(agentCfg.Name, agentCfg.URL, agentCfg.Description, agentCfg.DestructiveHint)
+			a.a2aClients[agentCfg.Name] = client
+		}
+	}
+	// A2A workflow nodes
+	if node.Type == "a2a" && node.URL != "" {
+		if _, exists := a.a2aClients[node.Name]; !exists {
+			client := a2a.NewClient(node.Name, node.URL, node.Description, node.DestructiveHint)
+			a.a2aClients[node.Name] = client
+		}
+	}
+	for i := range node.Agents {
+		a.initA2AFromTree(&node.Agents[i])
+	}
 }
 
 // Stop terminates the MCP server.
@@ -66,9 +112,18 @@ type ProcessResult struct {
 	Approval        *conversation.PendingApproval `json:"approval,omitempty"`
 }
 
+// isSimpleAgent returns true if the agent is a single LLM node (backward compat mode).
+func (a *Agent) isSimpleAgent() bool {
+	if a.config.Agent == nil {
+		return true
+	}
+	return a.config.Agent.Type == "llm" && len(a.config.Agent.Agents) == 0
+}
+
 // StartConversation creates a new conversation with the system prompt.
-func (a *Agent) StartConversation() (*conversation.Conversation, error) {
-	conv := conversation.New(a.config.Prompt)
+func (a *Agent) StartConversation(ctx context.Context) (*conversation.Conversation, error) {
+	sessionID := auth.SessionID(ctx)
+	conv := conversation.New(a.config.Prompt, sessionID)
 	if err := a.storage.SaveConversation(conv); err != nil {
 		return nil, err
 	}
@@ -76,7 +131,12 @@ func (a *Agent) StartConversation() (*conversation.Conversation, error) {
 }
 
 // ProcessMessage handles a user message using the LLM.
-func (a *Agent) ProcessMessage(conv *conversation.Conversation, userMessage string) (*ProcessResult, error) {
+func (a *Agent) ProcessMessage(ctx context.Context, conv *conversation.Conversation, userMessage string) (*ProcessResult, error) {
+	// Enrich context with conversation's session ID for downstream calls
+	if conv.SessionID != "" && auth.SessionID(ctx) == "" {
+		ctx = auth.WithSessionID(ctx, conv.SessionID)
+	}
+
 	if conv.Status == conversation.StatusWaitingApproval {
 		return &ProcessResult{
 			Response:        "Conversation is waiting for approval. Please respond to the pending approval first.",
@@ -87,11 +147,44 @@ func (a *Agent) ProcessMessage(conv *conversation.Conversation, userMessage stri
 
 	conv.AddMessage(conversation.RoleUser, userMessage)
 
+	if a.isSimpleAgent() {
+		return a.processSimpleMessage(ctx, conv)
+	}
+
+	return a.processOrchestrated(ctx, conv, userMessage)
+}
+
+// processOrchestrated runs the agent tree for a user message.
+func (a *Agent) processOrchestrated(ctx context.Context, conv *conversation.Conversation, userMessage string) (*ProcessResult, error) {
+	state := NewSessionState()
+	result, err := a.executeNode(ctx, a.config.Agent, state, userMessage, conv, nil, nil, false)
+	if err != nil {
+		errorMsg := fmt.Sprintf("Pipeline error: %v", err)
+		conv.AddMessage(conversation.RoleAssistant, errorMsg)
+		if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
+			return nil, saveErr
+		}
+		return &ProcessResult{Response: errorMsg}, nil
+	}
+
+	if err := a.storage.SaveConversation(conv); err != nil {
+		return nil, err
+	}
+
+	return &ProcessResult{
+		Response:        result.Response,
+		WaitingApproval: result.WaitingApproval,
+		Approval:        result.Approval,
+	}, nil
+}
+
+// processSimpleMessage is the original single-agent message processing (backward compat).
+func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Conversation) (*ProcessResult, error) {
 	// Convert conversation messages to LLM format
 	llmMessages := a.convertToLLMMessages(conv)
 
-	// Get available tools from MCP
-	tools := a.mcpClient.Tools()
+	// Get available tools (MCP + A2A)
+	tools := a.getAllTools()
 
 	// Call LLM with tools
 	response, err := a.llmClient.GenerateWithTools(a.config.Prompt, llmMessages, tools)
@@ -117,7 +210,43 @@ func (a *Agent) ProcessMessage(conv *conversation.Conversation, userMessage stri
 	toolName := response.ToolCall.Name
 	toolArgs := response.ToolCall.Arguments
 
-	// Get tool info
+	// Check if it's an A2A tool call
+	if strings.HasPrefix(toolName, a2aToolPrefix) {
+		agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
+		client, ok := a.a2aClients[agentName]
+		if !ok {
+			errorMsg := "A2A agent not found: " + agentName
+			conv.AddMessage(conversation.RoleAssistant, errorMsg)
+			if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
+				return nil, saveErr
+			}
+			return &ProcessResult{Response: errorMsg, WaitingApproval: false}, nil
+		}
+
+		// Check destructive hint for A2A agents
+		if client.DestructiveHint() {
+			description := fmt.Sprintf("**DELEGATE to A2A Agent: %s**\n\nMessage: %v", agentName, toolArgs["message"])
+			approval := conv.SetWaitingApproval(toolName, toolArgs, description)
+			conv.AddToolCall(toolName, toolArgs)
+
+			responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+			conv.AddMessage(conversation.RoleAssistant, responseText)
+
+			if err := a.storage.SaveConversation(conv); err != nil {
+				return nil, err
+			}
+
+			return &ProcessResult{
+				Response:        responseText,
+				WaitingApproval: true,
+				Approval:        approval,
+			}, nil
+		}
+
+		return a.executeA2AAndRespond(ctx, conv, client, toolArgs)
+	}
+
+	// Get MCP tool info
 	tool := a.mcpClient.GetTool(toolName)
 	if tool == nil {
 		errorMsg := "Tool not found: " + toolName
@@ -148,13 +277,40 @@ func (a *Agent) ProcessMessage(conv *conversation.Conversation, userMessage stri
 		}, nil
 	}
 
-	// Execute tool directly (non-destructive)
-	return a.executeToolAndRespond(conv, tool.Name, toolArgs)
+	// Execute MCP tool directly (non-destructive)
+	return a.executeToolAndRespond(ctx, conv, tool.Name, toolArgs)
+}
+
+// getAllTools returns MCP tools + synthetic A2A tools.
+func (a *Agent) getAllTools() []mcp.Tool {
+	tools := a.mcpClient.Tools()
+
+	// Add A2A agents as synthetic tools
+	for _, client := range a.a2aClients {
+		tool := mcp.Tool{
+			Name:        a2aToolPrefix + client.Name(),
+			Description: fmt.Sprintf("Delegate task to A2A agent '%s'. %s", client.Name(), client.Description()),
+			InputSchema: mcp.InputSchema{
+				Type: "object",
+				Properties: map[string]mcp.Property{
+					"message": {
+						Type:        "string",
+						Description: "The message/task to send to the agent",
+					},
+				},
+				Required: []string{"message"},
+			},
+			DestructiveHint: client.DestructiveHint(),
+		}
+		tools = append(tools, tool)
+	}
+
+	return tools
 }
 
 // convertToLLMMessages converts conversation messages to LLM format.
 func (a *Agent) convertToLLMMessages(conv *conversation.Conversation) []llm.Message {
-	messages := make([]llm.Message, 0)
+	messages := make([]llm.Message, 0, len(conv.Messages))
 
 	for _, msg := range conv.Messages {
 		// Skip system messages (handled separately as system instruction)
@@ -201,8 +357,8 @@ func (a *Agent) formatApprovalDescription(toolName string, args map[string]any) 
 	}
 }
 
-// executeToolAndRespond executes a tool and creates a response.
-func (a *Agent) executeToolAndRespond(conv *conversation.Conversation, toolName string, args map[string]any) (*ProcessResult, error) {
+// executeToolAndRespond executes an MCP tool and creates a response.
+func (a *Agent) executeToolAndRespond(ctx context.Context, conv *conversation.Conversation, toolName string, args map[string]any) (*ProcessResult, error) {
 	conv.AddToolCall(toolName, args)
 
 	result, err := a.mcpClient.CallTool(toolName, args)
@@ -241,11 +397,90 @@ func (a *Agent) executeToolAndRespond(conv *conversation.Conversation, toolName 
 	return &ProcessResult{Response: response, WaitingApproval: false}, nil
 }
 
+// executeA2AAndRespond executes an A2A call and creates a response.
+func (a *Agent) executeA2AAndRespond(ctx context.Context, conv *conversation.Conversation, client *a2a.Client, args map[string]any) (*ProcessResult, error) {
+	toolName := a2aToolPrefix + client.Name()
+	message, _ := args["message"].(string)
+
+	conv.AddToolCall(toolName, args)
+
+	task, err := client.SendMessage(ctx, message)
+	if err != nil {
+		errorMsg := fmt.Sprintf("A2A agent '%s' error: %v", client.Name(), err)
+		conv.AddToolResult(toolName, errorMsg, true)
+		conv.AddMessage(conversation.RoleAssistant, errorMsg)
+		if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
+			return nil, saveErr
+		}
+		return &ProcessResult{Response: errorMsg, WaitingApproval: false}, nil
+	}
+
+	// Check if the sub-agent returned "input-required" (needs approval)
+	if task.Status.State == "input-required" {
+		description := fmt.Sprintf("**PROXY APPROVAL — A2A Agent: %s**\n\n", client.Name())
+		if task.Status.Message != nil {
+			description += *task.Status.Message
+		}
+		approval := conv.SetWaitingApproval(toolName, args, description)
+		approval.RemoteTaskID = task.ID
+		approval.RemoteAgentName = client.Name()
+
+		responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+		conv.AddMessage(conversation.RoleAssistant, responseText)
+
+		if err := a.storage.SaveConversation(conv); err != nil {
+			return nil, err
+		}
+
+		return &ProcessResult{
+			Response:        responseText,
+			WaitingApproval: true,
+			Approval:        approval,
+		}, nil
+	}
+
+	// Extract result text from task artifact
+	var resultText string
+	if task.Artifact != nil {
+		for _, part := range task.Artifact.Parts {
+			if part.Text != "" {
+				resultText += part.Text
+			}
+		}
+	}
+	if resultText == "" {
+		resultText = fmt.Sprintf("Task %s completed with status: %s", task.ID, task.Status.State)
+	}
+
+	isError := task.Status.State == "failed"
+	conv.AddToolResult(toolName, resultText, isError)
+
+	var response string
+	if isError {
+		response = fmt.Sprintf("A2A agent '%s' failed:\n\n```\n%s\n```", client.Name(), resultText)
+	} else {
+		response = fmt.Sprintf("A2A agent '%s' responded:\n\n%s", client.Name(), resultText)
+	}
+
+	conv.AddMessage(conversation.RoleAssistant, response)
+
+	if err := a.storage.SaveConversation(conv); err != nil {
+		return nil, err
+	}
+
+	return &ProcessResult{Response: response, WaitingApproval: false}, nil
+}
+
 // ResolveApproval handles an approval response.
-func (a *Agent) ResolveApproval(approvalUUID string, approved bool) (*conversation.Conversation, *ProcessResult, error) {
+func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approved bool) (*conversation.Conversation, *ProcessResult, error) {
 	conv, err := a.storage.FindConversationByApprovalUUID(approvalUUID)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Enrich context with conversation's session ID for downstream calls
+	if conv.SessionID != "" && auth.SessionID(ctx) == "" {
+		ctx = auth.WithSessionID(ctx, conv.SessionID)
 	}
 
 	if conv.PendingApproval == nil {
@@ -254,8 +489,12 @@ func (a *Agent) ResolveApproval(approvalUUID string, approved bool) (*conversati
 
 	toolName := conv.PendingApproval.ToolName
 	toolArgs := conv.PendingApproval.ToolArgs
+	remoteTaskID := conv.PendingApproval.RemoteTaskID
+	remoteAgentName := conv.PendingApproval.RemoteAgentName
+	pipelineState := conv.PipelineState
 
 	conv.ResolveApproval()
+	conv.PipelineState = nil
 
 	if !approved {
 		response := "Operation cancelled by user."
@@ -264,17 +503,154 @@ func (a *Agent) ResolveApproval(approvalUUID string, approved bool) (*conversati
 		if err := a.storage.SaveConversation(conv); err != nil {
 			return nil, nil, err
 		}
+
+		// Forward rejection to remote agent if proxy
+		if remoteTaskID != "" && remoteAgentName != "" {
+			client, ok := a.a2aClients[remoteAgentName]
+			if ok {
+				_, _ = client.ContinueTask(ctx, remoteTaskID, "rejected")
+			}
+		}
+
 		return conv, &ProcessResult{Response: response, WaitingApproval: false}, nil
 	}
 
-	// Execute the approved tool
 	conv.AddMessage(conversation.RoleUser, "[APPROVAL]: Approved")
-	result, err := a.executeToolAndRespond(conv, toolName, toolArgs)
+
+	// Proxy forwarding: forward approval to the remote A2A agent
+	if remoteTaskID != "" && remoteAgentName != "" {
+		client, ok := a.a2aClients[remoteAgentName]
+		if !ok {
+			return nil, nil, fmt.Errorf("A2A agent not found for proxy approval: %s", remoteAgentName)
+		}
+
+		task, err := client.ContinueTask(ctx, remoteTaskID, "approved")
+		if err != nil {
+			return nil, nil, fmt.Errorf("proxy approval failed: %w", err)
+		}
+
+		resultText := extractTaskText(task)
+		isError := task.Status.State == "failed"
+		conv.AddToolResult(toolName, resultText, isError)
+
+		var response string
+		if isError {
+			response = fmt.Sprintf("A2A agent '%s' failed:\n\n```\n%s\n```", remoteAgentName, resultText)
+		} else {
+			response = fmt.Sprintf("A2A agent '%s' responded:\n\n%s", remoteAgentName, resultText)
+		}
+		conv.AddMessage(conversation.RoleAssistant, response)
+
+		// If pipeline state exists, resume the pipeline with the result
+		if pipelineState != nil {
+			state := NewSessionState()
+			state.Load(pipelineState.SessionState)
+			if pipelineState.PausedNodeOutputKey != "" {
+				state.Set(pipelineState.PausedNodeOutputKey, resultText)
+			}
+
+			resume := &ResumeInfo{
+				Path:                pipelineState.PausedNodePath,
+				ToolResult:          resultText,
+				PausedNodeOutputKey: pipelineState.PausedNodeOutputKey,
+			}
+
+			nodeResult, err := a.executeNode(ctx, a.config.Agent, state, pipelineState.UserMessage, conv, resume, nil, false)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			if err := a.storage.SaveConversation(conv); err != nil {
+				return nil, nil, err
+			}
+
+			return conv, &ProcessResult{
+				Response:        nodeResult.Response,
+				WaitingApproval: nodeResult.WaitingApproval,
+				Approval:        nodeResult.Approval,
+			}, nil
+		}
+
+		if err := a.storage.SaveConversation(conv); err != nil {
+			return nil, nil, err
+		}
+		return conv, &ProcessResult{Response: response, WaitingApproval: false}, nil
+	}
+
+	// No pipeline state → simple agent approval (existing behavior)
+	if pipelineState == nil {
+		if strings.HasPrefix(toolName, a2aToolPrefix) {
+			agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
+			client, ok := a.a2aClients[agentName]
+			if !ok {
+				return nil, nil, fmt.Errorf("A2A agent not found: %s", agentName)
+			}
+			result, err := a.executeA2AAndRespond(ctx, conv, client, toolArgs)
+			if err != nil {
+				return nil, nil, err
+			}
+			return conv, result, nil
+		}
+
+		result, err := a.executeToolAndRespond(ctx, conv, toolName, toolArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		return conv, result, nil
+	}
+
+	// Pipeline resume: execute the approved tool, then continue the pipeline
+	var toolResult string
+	if strings.HasPrefix(toolName, a2aToolPrefix) {
+		agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
+		client, ok := a.a2aClients[agentName]
+		if !ok {
+			return nil, nil, fmt.Errorf("A2A agent not found: %s", agentName)
+		}
+		message, _ := toolArgs["message"].(string)
+		task, err := client.SendMessage(ctx, message)
+		if err != nil {
+			return nil, nil, fmt.Errorf("A2A execution failed: %w", err)
+		}
+		toolResult = extractTaskText(task)
+		conv.AddToolResult(toolName, toolResult, task.Status.State == "failed")
+	} else {
+		a.mcpMu.Lock()
+		result, err := a.mcpClient.CallTool(toolName, toolArgs)
+		a.mcpMu.Unlock()
+		if err != nil {
+			return nil, nil, fmt.Errorf("tool execution failed: %w", err)
+		}
+		if len(result.Content) > 0 {
+			toolResult = result.Content[0].Text
+		}
+		conv.AddToolResult(toolName, toolResult, result.IsError)
+	}
+
+	// Resume the pipeline from the paused node
+	state := NewSessionState()
+	state.Load(pipelineState.SessionState)
+
+	resume := &ResumeInfo{
+		Path:                pipelineState.PausedNodePath,
+		ToolResult:          toolResult,
+		PausedNodeOutputKey: pipelineState.PausedNodeOutputKey,
+	}
+
+	nodeResult, err := a.executeNode(ctx, a.config.Agent, state, pipelineState.UserMessage, conv, resume, nil, false)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return conv, result, nil
+	if err := a.storage.SaveConversation(conv); err != nil {
+		return nil, nil, err
+	}
+
+	return conv, &ProcessResult{
+		Response:        nodeResult.Response,
+		WaitingApproval: nodeResult.WaitingApproval,
+		Approval:        nodeResult.Approval,
+	}, nil
 }
 
 // GetConversation retrieves a conversation by ID.
@@ -287,10 +663,7 @@ func (a *Agent) ListConversations() ([]*conversation.Conversation, error) {
 	return a.storage.ListConversations()
 }
 
-// GetTools returns the available MCP tools.
+// GetTools returns the available MCP tools and A2A agents.
 func (a *Agent) GetTools() []mcp.Tool {
-	if a.mcpClient != nil {
-		return a.mcpClient.Tools()
-	}
-	return nil
+	return a.getAllTools()
 }

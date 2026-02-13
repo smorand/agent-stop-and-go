@@ -1,0 +1,37 @@
+name: loop-processor
+description: A loop agent that repeatedly processes resources until a condition is met.
+
+host: 0.0.0.0
+port: 8080
+data_dir: ./data
+
+llm:
+  model: gemini-2.5-flash
+
+mcp:
+  command: ./bin/mcp-resources
+  args:
+    - --db
+    - ./data/resources.db
+
+# Loop pipeline: check resources, decide whether to continue
+agent:
+  name: resource-monitor
+  type: loop
+  max_iterations: 5
+  agents:
+    - name: checker
+      type: llm
+      model: gemini-2.5-flash
+      output_key: check_result
+      can_exit_loop: true
+      prompt: |
+        You are a resource checker. List all resources using the resources_list tool.
+
+        After listing, analyze the results:
+        - If there are 3 or more resources, call the exit_loop tool to stop.
+        - If there are fewer than 3 resources, respond with "Need more resources"
+          and add a resource using resources_add with a generated name like
+          "auto-resource-N" and a random value between 1 and 100.
+
+        Always list first, then decide.

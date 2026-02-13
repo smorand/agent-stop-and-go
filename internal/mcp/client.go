@@ -132,7 +132,7 @@ func (c *Client) initialize() error {
 	params := InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		ClientInfo: ClientInfo{
-			Name:    "agent-stop-and-go",
+			Name:    "agent",
 			Version: "1.0.0",
 		},
 		Capabilities: map[string]any{},
