@@ -38,6 +38,10 @@ ralph.yaml
 stories.yaml
 progress.md
 
+# Functional test artifacts
+tests/tmp/
+*.tmp
+
 # OS files
 .DS_Store
 Thumbs.db
