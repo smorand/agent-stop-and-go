@@ -18,7 +18,7 @@ Project-specific Go conventions for Agent Stop and Go.
 
 - `internal/agent/`: Core agent logic (split across `agent.go` for simple mode, `orchestrator.go` for tree-based)
 - `internal/llm/`: Multi-provider LLM interface (`Client` interface, `GeminiClient`, `ClaudeClient`)
-- `internal/mcp/`: MCP JSON-RPC client (`client.go`) and protocol types (`protocol.go`)
+- `internal/mcp/`: MCP JSON-RPC client (`client.go`), `CompositeClient` for multi-server aggregation (`client_composite.go`), and protocol types (`protocol.go`)
 - `internal/a2a/`: A2A JSON-RPC client and protocol types
 - `internal/auth/`: Context-based auth propagation (Bearer tokens, session IDs)
 - `internal/config/`: YAML config loader
@@ -28,7 +28,7 @@ Project-specific Go conventions for Agent Stop and Go.
 ## Concurrency
 
 - `sync.Mutex` on `Agent.llmMu` to protect lazy LLM client creation
-- `sync.Mutex` on `Agent.mcpMu` to serialize MCP tool calls in parallel pipelines
+- `sync.Mutex` on `CompositeClient.mu` to serialize MCP tool calls across sub-clients
 - `sync.Mutex` on `Conversation.mu` for message append safety
 - `sync.RWMutex` on `Storage.mu` for file read/write safety
 - `sync.RWMutex` on `SessionState.mu` for state access in parallel nodes

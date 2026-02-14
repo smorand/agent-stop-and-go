@@ -7,8 +7,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// MCPConfig holds the MCP server configuration.
-type MCPConfig struct {
+// MCPServerConfig holds the configuration for a single MCP server.
+type MCPServerConfig struct {
+	Name    string   `yaml:"name"`    // Unique server name (required)
 	URL     string   `yaml:"url"`     // Streamable HTTP endpoint
 	Command string   `yaml:"command"` // stdio subprocess command
 	Args    []string `yaml:"args"`    // stdio subprocess args
@@ -45,16 +46,16 @@ type AgentNode struct {
 
 // Config holds the agent configuration loaded from agent.yaml.
 type Config struct {
-	Name        string     `yaml:"name"`
-	Description string     `yaml:"description"`
-	Prompt      string     `yaml:"prompt"`
-	Host        string     `yaml:"host"`
-	Port        int        `yaml:"port"`
-	DataDir     string     `yaml:"data_dir"`
-	LLM         LLMConfig  `yaml:"llm"`
-	MCP         MCPConfig  `yaml:"mcp"`
-	A2A         []A2AAgent `yaml:"a2a"`
-	Agent       *AgentNode `yaml:"agent,omitempty"` // Agent tree (overrides top-level prompt/llm/a2a)
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	Prompt      string            `yaml:"prompt"`
+	Host        string            `yaml:"host"`
+	Port        int               `yaml:"port"`
+	DataDir     string            `yaml:"data_dir"`
+	LLM         LLMConfig         `yaml:"llm"`
+	MCPServers  []MCPServerConfig `yaml:"mcp_servers"`
+	A2A         []A2AAgent        `yaml:"a2a"`
+	Agent       *AgentNode        `yaml:"agent,omitempty"` // Agent tree (overrides top-level prompt/llm/a2a)
 }
 
 // Load reads and parses the agent.yaml configuration file.
@@ -85,6 +86,11 @@ func Load(path string) (*Config, error) {
 		cfg.LLM.Model = "gemini-2.5-flash"
 	}
 
+	// Validate MCP server configs
+	if err := validateMCPServers(cfg.MCPServers); err != nil {
+		return nil, err
+	}
+
 	// Synthesize default agent node from top-level fields when agent tree is not defined
 	if cfg.Agent == nil {
 		cfg.Agent = &AgentNode{
@@ -97,4 +103,19 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// validateMCPServers checks that all MCP server entries have a non-empty, unique name.
+func validateMCPServers(servers []MCPServerConfig) error {
+	seen := make(map[string]bool, len(servers))
+	for i, s := range servers {
+		if s.Name == "" {
+			return fmt.Errorf("mcp_servers[%d]: name is required", i)
+		}
+		if seen[s.Name] {
+			return fmt.Errorf("mcp_servers: duplicate name %q", s.Name)
+		}
+		seen[s.Name] = true
+	}
+	return nil
 }

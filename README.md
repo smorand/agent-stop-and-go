@@ -167,12 +167,14 @@ description: "A resource management agent"
 prompt: |
   Your agent's system prompt here...
 
-# Required: MCP server providing tools
-mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/resources.db
+# Required: MCP servers providing tools (one or more)
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp    # Streamable HTTP (preferred)
+  # OR legacy stdio transport:
+  # - name: resources
+  #   command: ./bin/mcp-resources
+  #   args: [--db, ./data/resources.db]
 
 # Optional (shown with defaults)
 host: 0.0.0.0        # Listen address

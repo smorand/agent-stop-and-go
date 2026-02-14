@@ -57,6 +57,7 @@ internal/
 ├── mcp/                          # MCP client (dual transport: HTTP + stdio)
 │   ├── client.go                 # Client interface, StdioClient, factory
 │   ├── client_http.go            # HTTPClient (Streamable HTTP via mcp-go)
+│   ├── client_composite.go       # CompositeClient wrapping multiple sub-clients
 │   └── protocol.go               # Domain types + stdio transport types
 ├── a2a/                          # A2A client (JSON-RPC over HTTPS)
 ├── auth/                         # Bearer token context propagation
@@ -83,7 +84,7 @@ testdata/                             # E2E orchestration test configs
 
 ## Key Concepts
 
-- **MCP Server**: Standalone HTTP service (`mcp-resources`) providing tools via MCP Streamable HTTP transport (legacy stdio also supported)
+- **MCP Server**: One or more standalone services providing tools. Configured as a list under `mcp_servers`, each with a required `name` field. Tools are aggregated by a `CompositeClient` that routes calls to the correct sub-client
 - **A2A Agents**: Remote agents accessible via JSON-RPC over HTTPS
 - **destructiveHint**: Tool/agent property indicating approval requirement
 - **Conversation Status**: `active`, `waiting_approval`, `completed`
@@ -112,11 +113,13 @@ data_dir: ./data
 llm:
   model: gemini-2.5-flash    # or claude-sonnet-4-5-20250929 for Claude
 
-mcp:
-  url: http://localhost:8090/mcp    # Streamable HTTP (preferred)
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp    # Streamable HTTP (preferred)
   # OR legacy stdio transport:
-  # command: ./bin/mcp-resources
-  # args: [--db, ./data/resources.db]
+  # - name: resources
+  #   command: ./bin/mcp-resources
+  #   args: [--db, ./data/resources.db]
 
 a2a:
   - name: summarizer
@@ -130,8 +133,9 @@ a2a:
 When `agent` key is present, the tree-based orchestrator is used:
 
 ```yaml
-mcp:
-  url: http://localhost:8090/mcp
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp
 
 agent:
   name: pipeline
@@ -222,7 +226,7 @@ Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require
   - Sequential, Parallel, Loop pipelines with MCP tools
   - A2A chain delegation with proxy approval
   - Orchestrated pipelines accessed via A2A protocol
-- **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests, use `mcp.url`)
+- **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests, use `mcp_servers`)
 
 ## Development Notes
 

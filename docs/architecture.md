@@ -67,7 +67,7 @@ graph TB
 | `api` | `internal/api/` | Fiber HTTP handlers, route setup, A2A server (JSON-RPC dispatch), interactive HTML docs |
 | `agent` | `internal/agent/` | Core agent logic: LLM interaction, MCP tool calls, A2A delegation, orchestration engine with sequential/parallel/loop execution |
 | `llm` | `internal/llm/` | Multi-provider LLM interface. `GeminiClient` calls the Google Generative Language API. `ClaudeClient` calls the Anthropic Messages API. Both use a 60-second HTTP timeout. |
-| `mcp` | `internal/mcp/` | MCP client: launches an external binary, communicates via JSON-RPC 2.0 over stdin/stdout. Handles `initialize`, `tools/list`, and `tools/call`. |
+| `mcp` | `internal/mcp/` | MCP client with multi-server support. `CompositeClient` aggregates tools from multiple MCP servers (HTTP or stdio) and routes `CallTool` to the correct sub-client. Handles `initialize`, `tools/list`, and `tools/call`. |
 | `a2a` | `internal/a2a/` | A2A client: JSON-RPC 2.0 over HTTPS to remote agents. Supports `message/send`, `tasks/get`, and `ContinueTask` (approval forwarding). |
 | `auth` | `internal/auth/` | Context-based propagation of Bearer tokens and session IDs. Provides `WithBearerToken()`, `BearerToken()`, `WithSessionID()`, `SessionID()`, and `GenerateSessionID()`. |
 | `config` | `internal/config/` | YAML config loader. Parses agent configuration including MCP, LLM, A2A, and orchestration tree settings. Applies defaults for missing fields. |
@@ -333,6 +333,6 @@ flowchart LR
 
 4. **Pipeline pause/resume via serialized state**: When an orchestrated pipeline pauses for approval, the entire session state and execution path are serialized into `PipelineState`. On resume, the orchestrator fast-forwards to the paused node.
 
-5. **MCP server as a subprocess**: The MCP server runs as a child process communicating via stdin/stdout. This keeps the tool implementation isolated and language-agnostic.
+5. **Multi-MCP server support**: Multiple MCP servers (HTTP or stdio) can be configured under `mcp_servers`. A `CompositeClient` aggregates tools from all servers and routes calls to the correct sub-client, keeping tool implementation isolated and language-agnostic.
 
 6. **Lazy LLM client creation**: In orchestrated mode, different nodes can use different LLM models. Clients are created on first use and cached in a thread-safe map, avoiding unnecessary API key validation for unused providers.

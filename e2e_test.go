@@ -61,9 +61,7 @@ func TestMain(m *testing.M) {
 	// Override for tests
 	cfg.Port = 9090
 	cfg.DataDir = "./data/e2e_test"
-	cfg.MCP.URL = "http://localhost:8090/mcp"
-	cfg.MCP.Command = ""
-	cfg.MCP.Args = nil
+	cfg.MCPServers = []config.MCPServerConfig{{Name: "resources", URL: "http://localhost:8090/mcp"}}
 
 	store, err := storage.New(cfg.DataDir)
 	if err != nil {

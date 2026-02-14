@@ -102,11 +102,12 @@ The included `mcp-resources` binary provides a SQLite-backed resource management
 Any binary that speaks MCP JSON-RPC 2.0 over stdio can be used:
 
 ```yaml
-mcp:
-  command: /path/to/my-mcp-server
-  args:
-    - --flag1
-    - value1
+mcp_servers:
+  - name: my-tools
+    command: /path/to/my-mcp-server
+    args:
+      - --flag1
+      - value1
 ```
 
 The binary must implement:
@@ -118,7 +119,7 @@ The binary must implement:
 
 ### Thread Safety
 
-MCP tool calls are serialized via `Agent.mcpMu` (a `sync.Mutex`). This ensures correctness when parallel orchestration nodes call MCP tools concurrently on the same subprocess.
+MCP tool calls are serialized via `CompositeClient.mu` (a `sync.Mutex`). This ensures correctness when parallel orchestration nodes call MCP tools concurrently across multiple sub-clients.
 
 ## A2A Protocol
 
@@ -540,12 +541,14 @@ data_dir: ./data                # Default: "./data"
 llm:
   model: gemini-2.5-flash       # Default: "gemini-2.5-flash"
 
-# MCP server (required)
-mcp:
-  command: ./bin/mcp-resources   # Path to MCP binary
-  args:                          # Arguments passed to the binary
-    - --db
-    - ./data/resources.db
+# MCP servers (required, one or more)
+mcp_servers:
+  - name: resources              # Required: unique server name
+    url: http://localhost:8090/mcp  # Streamable HTTP (preferred)
+  # OR legacy stdio transport:
+  # - name: resources
+  #   command: ./bin/mcp-resources
+  #   args: [--db, ./data/resources.db]
 
 # A2A sub-agents (optional, simple mode)
 a2a:

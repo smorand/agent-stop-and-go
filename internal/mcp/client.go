@@ -41,10 +41,10 @@ func NewClient(cfg ClientConfig) (Client, error) {
 // NopClient is a no-op MCP client for agents that don't use MCP tools.
 type NopClient struct{}
 
-func (c *NopClient) Start() error                                       { return nil }
-func (c *NopClient) Stop() error                                        { return nil }
-func (c *NopClient) Tools() []Tool                                      { return nil }
-func (c *NopClient) GetTool(string) *Tool                               { return nil }
+func (c *NopClient) Start() error         { return nil }
+func (c *NopClient) Stop() error          { return nil }
+func (c *NopClient) Tools() []Tool        { return nil }
+func (c *NopClient) GetTool(string) *Tool { return nil }
 func (c *NopClient) CallTool(string, map[string]any) (*CallToolResult, error) {
 	return nil, fmt.Errorf("no MCP server configured")
 }

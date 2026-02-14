@@ -16,5 +16,6 @@ port: 8080
 data_dir: /app/data/agent-b
 llm:
   model: gemini-3-flash-preview
-mcp:
-  url: http://mcp-resources:8080/mcp
+mcp_servers:
+  - name: resources
+    url: http://mcp-resources:8080/mcp

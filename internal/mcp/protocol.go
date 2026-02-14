@@ -61,6 +61,7 @@ type Tool struct {
 	Description     string      `json:"description"`
 	InputSchema     InputSchema `json:"inputSchema"`
 	DestructiveHint bool        `json:"destructiveHint,omitempty"`
+	Server          string      `json:"server,omitempty"`
 }
 
 // InputSchema defines the JSON schema for tool inputs.

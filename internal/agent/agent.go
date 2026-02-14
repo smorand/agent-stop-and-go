@@ -26,7 +26,6 @@ type Agent struct {
 	llmClient  llm.Client            // primary client (backward compat)
 	llmClients map[string]llm.Client // model -> client (for orchestrated agents)
 	llmMu      sync.Mutex            // protects llmClients map
-	mcpMu      sync.Mutex            // serializes MCP calls for parallel safety
 	a2aClients map[string]*a2a.Client
 }
 
@@ -40,22 +39,27 @@ func New(cfg *config.Config, store *storage.Storage) *Agent {
 	}
 }
 
-// Start initializes the agent, starts the MCP server and LLM client.
+// Start initializes the agent, starts MCP servers and LLM client.
 func (a *Agent) Start() error {
-	// Create MCP client from config (HTTP or stdio)
-	mcpClient, err := mcp.NewClient(mcp.ClientConfig{
-		URL:     a.config.MCP.URL,
-		Command: a.config.MCP.Command,
-		Args:    a.config.MCP.Args,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create MCP client: %w", err)
+	// Create MCP clients from config (one per server entry)
+	var namedClients []mcp.NamedClient
+	for _, serverCfg := range a.config.MCPServers {
+		client, err := mcp.NewClient(mcp.ClientConfig{
+			URL:     serverCfg.URL,
+			Command: serverCfg.Command,
+			Args:    serverCfg.Args,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create MCP client %q: %w", serverCfg.Name, err)
+		}
+		namedClients = append(namedClients, mcp.NamedClient{Name: serverCfg.Name, Client: client})
 	}
-	a.mcpClient = mcpClient
 
-	if err := a.mcpClient.Start(); err != nil {
-		return fmt.Errorf("failed to start MCP client: %w", err)
+	compositeClient := mcp.NewCompositeClient(namedClients)
+	if err := compositeClient.Start(); err != nil {
+		return fmt.Errorf("failed to start MCP clients: %w", err)
 	}
+	a.mcpClient = compositeClient
 
 	// Initialize primary LLM client
 	llmClient, err := llm.NewClient(a.config.LLM.Model)
@@ -620,9 +624,7 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 		toolResult = extractTaskText(task)
 		conv.AddToolResult(toolName, toolResult, task.Status.State == "failed")
 	} else {
-		a.mcpMu.Lock()
 		result, err := a.mcpClient.CallTool(toolName, toolArgs)
-		a.mcpMu.Unlock()
 		if err != nil {
 			return nil, nil, fmt.Errorf("tool execution failed: %w", err)
 		}

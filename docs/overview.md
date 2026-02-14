@@ -110,7 +110,7 @@ agent-stop-and-go/
 │   ├── api/                       # HTTP handlers, routes, A2A server, docs
 │   ├── agent/                     # Core agent logic, orchestration engine
 │   ├── llm/                       # Multi-provider LLM clients (Gemini, Claude)
-│   ├── mcp/                       # MCP JSON-RPC client (stdio)
+│   ├── mcp/                       # MCP client (multi-server, HTTP + stdio)
 │   ├── a2a/                       # A2A JSON-RPC client (HTTPS)
 │   ├── auth/                      # Bearer token and session ID propagation
 │   ├── config/                    # YAML configuration loader
