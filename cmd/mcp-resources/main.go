@@ -179,7 +179,10 @@ func makeToolAdd(db *sql.DB) server.ToolHandlerFunc {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		text, _ := json.MarshalIndent(result, "", "  ")
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
+		}
 		return mcp.NewToolResultText(string(text)), nil
 	}
 }
@@ -200,7 +203,10 @@ func makeToolRemove(db *sql.DB) server.ToolHandlerFunc {
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("failed to remove resource: %v", err)), nil
 			}
-			affected, _ := result.RowsAffected()
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to get rows affected: %v", err)), nil
+			}
 			if affected > 0 {
 				removed = append(removed, id)
 			}
@@ -241,7 +247,10 @@ func makeToolRemove(db *sql.DB) server.ToolHandlerFunc {
 			"removed_count": len(removed),
 			"removed_ids":   removed,
 		}
-		text, _ := json.MarshalIndent(result, "", "  ")
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
+		}
 		return mcp.NewToolResultText(string(text)), nil
 	}
 }
@@ -279,7 +288,10 @@ func makeToolList(db *sql.DB) server.ToolHandlerFunc {
 			"resources": resources,
 			"count":     len(resources),
 		}
-		text, _ := json.MarshalIndent(result, "", "  ")
+		text, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("failed to marshal result: %v", err)), nil
+		}
 		return mcp.NewToolResultText(string(text)), nil
 	}
 }

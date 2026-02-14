@@ -348,7 +348,10 @@ func (a *Agent) convertToLLMMessages(conv *conversation.Conversation) []llm.Mess
 
 // formatApprovalDescription creates a human-readable description of the pending tool call.
 func (a *Agent) formatApprovalDescription(toolName string, args map[string]any) string {
-	argsJSON, _ := json.MarshalIndent(args, "", "  ")
+	argsJSON, err := json.MarshalIndent(args, "", "  ")
+	if err != nil {
+		argsJSON = []byte(fmt.Sprintf("%v", args))
+	}
 
 	switch toolName {
 	case "resources_add":

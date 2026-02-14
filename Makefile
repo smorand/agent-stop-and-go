@@ -1,4 +1,4 @@
-.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild rebuild-all test test-unit test-all fmt vet lint check run run-up run-down info help list-commands init-mod init-deps docker docker-build docker-push docker-run e2e compose-up compose-down
+.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild rebuild-all test test-unit test-functional test-all fmt vet lint check run run-up run-down info help list-commands init-mod init-deps docker docker-build docker-push docker-run e2e compose-up compose-down
 
 # Detect current platform
 GOOS=$(shell go env GOOS)
@@ -39,6 +39,9 @@ MODULE_NAME ?= $(DEFAULT_BINARY_NAME)
 
 # Find all Go source files for rebuild detection
 GO_SOURCES=$(shell find . -name '*.go' -type f 2>/dev/null | grep -v '_test.go')
+
+# Detect if functional tests exist
+HAS_FUNCTIONAL_TESTS=$(shell [ -f tests/run_tests.sh ] && echo "yes" || echo "no")
 
 # Build configuration
 BUILD_DIR=bin
@@ -287,6 +290,17 @@ clean-all: clean
 test-unit:
 	@echo "Running Go unit tests..."
 	@go test -v ./...
+
+# Run functional tests (shell scripts in tests/)
+test-functional: build
+ifeq ($(HAS_FUNCTIONAL_TESTS),yes)
+	@echo "Running functional tests..."
+	@chmod +x tests/*.sh 2>/dev/null || true
+	@tests/run_tests.sh
+else
+	@echo "No functional tests found (tests/run_tests.sh not present)"
+	@echo "Run 'make test-unit' for Go unit tests"
+endif
 
 # Run tests (alias for test-unit)
 test: test-unit

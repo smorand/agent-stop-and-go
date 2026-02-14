@@ -33,6 +33,7 @@ The Makefile uses `define`/`eval` to generate per-command, per-platform build ru
 | `run CMD=x` | Build and run a command (`CMD` is required) |
 | `test` | Run `go test -v ./...` |
 | `test-unit` | Run Go unit tests (alias for `test`) |
+| `test-functional` | Run functional tests (shell scripts in `tests/`, if present) |
 | `test-all` | Run unit + E2E tests |
 | `e2e` | Build all binaries + run E2E tests with `-tags=e2e` (mcp-resources started as subprocess by tests) |
 | `fmt` | Run `go fmt ./...` |
