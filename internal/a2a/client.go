@@ -12,6 +12,8 @@ import (
 	"agent-stop-and-go/internal/auth"
 )
 
+const httpClientTimeout = 60 * time.Second
+
 // Client communicates with an A2A agent over HTTPS.
 type Client struct {
 	name            string
@@ -29,7 +31,7 @@ func NewClient(name, url, description string, destructiveHint bool) *Client {
 		url:             url,
 		description:     description,
 		destructiveHint: destructiveHint,
-		httpClient:      &http.Client{Timeout: 60 * time.Second},
+		httpClient:      &http.Client{Timeout: httpClientTimeout},
 		nextID:          1,
 	}
 }

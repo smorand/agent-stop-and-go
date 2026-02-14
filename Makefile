@@ -1,9 +1,18 @@
-.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild rebuild-all test test-unit test-all fmt vet lint check run info help list-commands docker docker-build docker-push docker-run run-up run-down compose-up compose-down e2e init-mod init-deps
+.PHONY: build build-all install install-launcher uninstall clean clean-all rebuild rebuild-all test test-unit test-all fmt vet lint check run run-up run-down info help list-commands init-mod init-deps docker docker-build docker-push docker-run e2e compose-up compose-down
 
 # Detect current platform
 GOOS=$(shell go env GOOS)
 GOARCH=$(shell go env GOARCH)
 CURRENT_PLATFORM=$(GOOS)-$(GOARCH)
+
+# Docker configuration
+PROJECT_NAME := $(shell basename $(CURDIR))
+MAKE_DOCKER_PREFIX ?=
+DOCKER_TAG ?= latest
+
+# Detect optional directories for Docker build
+HAS_INTERNAL := $(shell test -d internal && echo "yes" || echo "no")
+HAS_DATA := $(shell test -d data && echo "yes" || echo "no")
 
 # Detect install directory based on user privileges (root vs non-root)
 IS_ROOT=$(shell [ $$(id -u) -eq 0 ] && echo "yes" || echo "no")
@@ -17,220 +26,173 @@ else
 	SUDO_CMD=
 endif
 
-# Auto-detect project structure
-HAS_SRC_DIR=$(shell [ -d src ] && echo "yes" || echo "no")
-HAS_CMD_DIR=$(shell [ -d cmd ] && echo "yes" || echo "no")
+# Detect all commands in cmd/ directory
+COMMANDS=$(shell find cmd -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
 
-# Detect all commands in cmd/ directory (if multi-command layout)
-ifeq ($(HAS_CMD_DIR),yes)
-	COMMANDS=$(shell find cmd -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-	HAS_MULTIPLE_CMDS=$(shell [ $$(find cmd -mindepth 1 -maxdepth 1 -type d | wc -l) -gt 1 ] && echo "yes" || echo "no")
-else
-	COMMANDS=
-	HAS_MULTIPLE_CMDS=no
+# Default binary name (first command in cmd/ directory)
+FIRST_CMD=$(shell ls cmd 2>/dev/null | head -1)
+DEFAULT_BINARY_NAME=$(if $(FIRST_CMD),$(FIRST_CMD),$(shell basename $$(pwd)))
+
+# Module name - override this if your module path differs from binary name
+# Example: MODULE_NAME=github.com/myorg/myproject
+MODULE_NAME ?= $(DEFAULT_BINARY_NAME)
+
+# Find all Go source files for rebuild detection
+GO_SOURCES=$(shell find . -name '*.go' -type f 2>/dev/null | grep -v '_test.go')
+
+# Build configuration
+BUILD_DIR=bin
+GO_MOD_PATH=go.mod
+GO_SUM_PATH=go.sum
+
+# All platforms to build for build-all
+ALL_PLATFORMS=linux-amd64 darwin-amd64 darwin-arm64 windows-amd64
+
+# Generate list of all binaries for current platform
+CURRENT_BINARIES=$(foreach cmd,$(COMMANDS),$(BUILD_DIR)/$(cmd)-$(CURRENT_PLATFORM))
+
+# Generate list of all binaries for all platforms
+ALL_BINARIES=$(foreach cmd,$(COMMANDS),$(foreach plat,$(ALL_PLATFORMS),$(BUILD_DIR)/$(cmd)-$(plat)$(if $(findstring windows,$(plat)),.exe,)))
+
+# Generate list of all launcher scripts
+ALL_LAUNCHERS=$(foreach cmd,$(COMMANDS),$(BUILD_DIR)/$(cmd).sh)
+
+# Create build directory (order-only prerequisite)
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+# Define rule template for building a single command for current platform
+define BUILD_CMD_CURRENT_RULE
+$(BUILD_DIR)/$(1)-$(CURRENT_PLATFORM): $(GO_SUM_PATH) $(GO_SOURCES) | $(BUILD_DIR)
+	@echo "Building $(1) for $(CURRENT_PLATFORM)..."
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o $$@ ./cmd/$(1)
+ifeq ($(GOOS),darwin)
+	@codesign -f -s - $$@
 endif
+	@echo "✓ Built: $$@"
+endef
 
-# Default binary name (for single-command projects)
-DEFAULT_BINARY_NAME=$(shell basename $$(pwd))
-
-# Set directories based on project structure
-ifeq ($(HAS_SRC_DIR),yes)
-	SRC_DIR=src
-	BUILD_DIR=bin
-	GO_MOD_PATH=$(SRC_DIR)/go.mod
-	GO_SUM_PATH=$(SRC_DIR)/go.sum
-else
-	SRC_DIR=.
-	BUILD_DIR=bin
-	GO_MOD_PATH=go.mod
-	GO_SUM_PATH=go.sum
+# Define rule template for building a command for a specific platform
+define BUILD_CMD_PLATFORM_RULE
+$(BUILD_DIR)/$(1)-$(2)$(if $(findstring windows,$(2)),.exe,): $(GO_SUM_PATH) $(GO_SOURCES) | $(BUILD_DIR)
+	@echo "Building $(1) for $(2)..."
+	@GOOS=$(word 1,$(subst -, ,$(2))) GOARCH=$(word 2,$(subst -, ,$(2))) go build -o $$@ ./cmd/$(1)
+ifeq ($(GOOS),darwin)
+	$(if $(findstring darwin,$(2)),@codesign -f -s - $$@,)
 endif
+	@echo "✓ Built: $$@"
+endef
 
-# Build for current platform only
-build:
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
-	@echo "Building all commands for current platform ($(CURRENT_PLATFORM))..."
-	@$(foreach cmd,$(COMMANDS),$(MAKE) build-cmd-current CMD=$(cmd);)
-else ifeq ($(HAS_CMD_DIR),yes)
-	@$(MAKE) build-cmd-current CMD=$(DEFAULT_BINARY_NAME)
-else ifeq ($(HAS_SRC_DIR),yes)
-	@$(MAKE) build-single-current
-else
-	@$(MAKE) build-flat-current
-endif
+# Define rule template for creating launcher script
+define BUILD_LAUNCHER_RULE
+$(BUILD_DIR)/$(1).sh: $(foreach plat,$(ALL_PLATFORMS),$(BUILD_DIR)/$(1)-$(plat)$(if $(findstring windows,$(plat)),.exe,))
+	@echo "Creating launcher script for $(1)..."
+	@echo '#!/bin/bash' > $$@
+	@echo '' >> $$@
+	@echo '# Auto-generated launcher script for $(1)' >> $$@
+	@echo '# Detects platform and executes the correct binary' >> $$@
+	@echo '' >> $$@
+	@echo '# Get the directory where this script is located' >> $$@
+	@echo 'SCRIPT_DIR="$$$$(cd "$$$$(dirname "$$$${BASH_SOURCE[0]}")" && pwd)"' >> $$@
+	@echo '' >> $$@
+	@echo '# Detect OS' >> $$@
+	@echo 'OS=$$$$(uname -s | tr "[:upper:]" "[:lower:]")' >> $$@
+	@echo '' >> $$@
+	@echo '# Detect architecture' >> $$@
+	@echo 'ARCH=$$$$(uname -m)' >> $$@
+	@echo '' >> $$@
+	@echo '# Map architecture names to Go convention' >> $$@
+	@echo 'case "$$$$ARCH" in' >> $$@
+	@echo '    x86_64)' >> $$@
+	@echo '        ARCH="amd64"' >> $$@
+	@echo '        ;;' >> $$@
+	@echo '    aarch64)' >> $$@
+	@echo '        ARCH="arm64"' >> $$@
+	@echo '        ;;' >> $$@
+	@echo '    arm64)' >> $$@
+	@echo '        ARCH="arm64"' >> $$@
+	@echo '        ;;' >> $$@
+	@echo '    *)' >> $$@
+	@echo '        echo "Unsupported architecture: $$$$ARCH" >&2' >> $$@
+	@echo '        exit 1' >> $$@
+	@echo '        ;;' >> $$@
+	@echo 'esac' >> $$@
+	@echo '' >> $$@
+	@echo '# Construct binary name' >> $$@
+	@echo 'BINARY="$$$$SCRIPT_DIR/$(1)-$$$$OS-$$$$ARCH"' >> $$@
+	@echo '' >> $$@
+	@echo '# Check if binary exists' >> $$@
+	@echo 'if [ ! -f "$$$$BINARY" ]; then' >> $$@
+	@echo '    echo "Error: Binary not found for platform $$$$OS-$$$$ARCH" >&2' >> $$@
+	@echo '    echo "Expected: $$$$BINARY" >&2' >> $$@
+	@echo '    echo "" >&2' >> $$@
+	@echo '    echo "Available binaries:" >&2' >> $$@
+	@echo '    ls -1 "$$$$SCRIPT_DIR"/$(1)-* 2>/dev/null | sed "s|^|  |" >&2' >> $$@
+	@echo '    exit 1' >> $$@
+	@echo 'fi' >> $$@
+	@echo '' >> $$@
+	@echo '# Execute the binary with all arguments' >> $$@
+	@echo 'exec "$$$$BINARY" "$$$$@"' >> $$@
+	@chmod +x $$@
+	@echo "✓ Created launcher script: $$@"
+endef
 
-# Build for all platforms and create launcher scripts
-build-all:
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
-	@echo "Building all commands for all platforms..."
-	@$(foreach cmd,$(COMMANDS),$(MAKE) build-cmd-all CMD=$(cmd);)
-else ifeq ($(HAS_CMD_DIR),yes)
-	@$(MAKE) build-cmd-all CMD=$(DEFAULT_BINARY_NAME)
-else ifeq ($(HAS_SRC_DIR),yes)
-	@$(MAKE) build-single-all
-else
-	@$(MAKE) build-flat-all
-endif
+# Filter out current platform from ALL_PLATFORMS to avoid duplicate rules
+OTHER_PLATFORMS=$(filter-out $(CURRENT_PLATFORM),$(ALL_PLATFORMS))
 
-rebuild: clean build
+# Generate rules for each command (current platform)
+$(foreach cmd,$(COMMANDS),$(eval $(call BUILD_CMD_CURRENT_RULE,$(cmd))))
 
-rebuild-all: clean-all build
+# Generate rules for each command × other platform combinations (excludes current platform)
+$(foreach cmd,$(COMMANDS),$(foreach plat,$(OTHER_PLATFORMS),$(eval $(call BUILD_CMD_PLATFORM_RULE,$(cmd),$(plat)))))
 
-# Helper target: Build single command for current platform (multi-command layout)
-build-cmd-current: $(GO_SUM_PATH)
-	@echo "Building $(CMD) for $(CURRENT_PLATFORM)..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o $(BUILD_DIR)/$(CMD)-$(CURRENT_PLATFORM) ./cmd/$(CMD)
-	@echo "✓ Built: $(BUILD_DIR)/$(CMD)-$(CURRENT_PLATFORM)"
+# Generate rules for launcher scripts
+$(foreach cmd,$(COMMANDS),$(eval $(call BUILD_LAUNCHER_RULE,$(cmd))))
 
-# Helper target: Build single command for all platforms (multi-command layout)
-build-cmd-all: $(GO_SUM_PATH)
-	@echo "Building $(CMD) for all platforms..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(CMD)-linux-amd64 ./cmd/$(CMD)
-	@echo "✓ Built: $(BUILD_DIR)/$(CMD)-linux-amd64"
-	@GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(CMD)-darwin-amd64 ./cmd/$(CMD)
-	@echo "✓ Built: $(BUILD_DIR)/$(CMD)-darwin-amd64"
-	@GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(CMD)-darwin-arm64 ./cmd/$(CMD)
-	@echo "✓ Built: $(BUILD_DIR)/$(CMD)-darwin-arm64"
-	@$(MAKE) create-launcher BINARY_NAME=$(CMD)
+# Build for current platform only (incremental)
+build: $(CURRENT_BINARIES)
+	@echo "Build complete for $(CURRENT_PLATFORM)!"
 
-# Helper target: Build for current platform (single-command with cmd/ layout)
-build-single-cmd-current: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for $(CURRENT_PLATFORM)..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) ./cmd/$(DEFAULT_BINARY_NAME)
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM)"
+# Build for all platforms and create launcher scripts (incremental)
+build-all: $(ALL_BINARIES) $(ALL_LAUNCHERS)
+	@echo "Build complete for all platforms!"
 
-# Helper target: Build for all platforms (single-command with cmd/ layout)
-build-single-cmd-all: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for all platforms..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64 ./cmd/$(DEFAULT_BINARY_NAME)
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64"
-	@GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64 ./cmd/$(DEFAULT_BINARY_NAME)
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64"
-	@GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64 ./cmd/$(DEFAULT_BINARY_NAME)
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64"
-	@$(MAKE) create-launcher BINARY_NAME=$(DEFAULT_BINARY_NAME)
+rebuild: clean-all build
 
-# Helper target: Build for current platform (src/ layout)
-build-single-current: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for $(CURRENT_PLATFORM)..."
-	@mkdir -p $(BUILD_DIR)
-	@cd $(SRC_DIR) && GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o ../$(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM)"
-
-# Helper target: Build for all platforms (src/ layout)
-build-single-all: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for all platforms..."
-	@mkdir -p $(BUILD_DIR)
-	@cd $(SRC_DIR) && GOOS=linux GOARCH=amd64 go build -o ../$(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64"
-	@cd $(SRC_DIR) && GOOS=darwin GOARCH=amd64 go build -o ../$(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64"
-	@cd $(SRC_DIR) && GOOS=darwin GOARCH=arm64 go build -o ../$(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64"
-	@$(MAKE) create-launcher BINARY_NAME=$(DEFAULT_BINARY_NAME)
-
-# Helper target: Build for current platform (flat layout)
-build-flat-current: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for $(CURRENT_PLATFORM)..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM)"
-
-# Helper target: Build for all platforms (flat layout)
-build-flat-all: $(GO_SUM_PATH)
-	@echo "Building $(DEFAULT_BINARY_NAME) for all platforms..."
-	@mkdir -p $(BUILD_DIR)
-	@GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64"
-	@GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64"
-	@GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64 .
-	@echo "✓ Built: $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64"
-	@$(MAKE) create-launcher BINARY_NAME=$(DEFAULT_BINARY_NAME)
-
-# Create launcher script for a specific binary
-create-launcher:
-	@echo "Creating launcher script for $(BINARY_NAME)..."
-	@mkdir -p $(BUILD_DIR)
-	@echo '#!/bin/bash' > $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Auto-generated launcher script for $(BINARY_NAME)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Detects platform and executes the correct binary' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Get the directory where this script is located' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'SCRIPT_DIR="$$(cd "$$(dirname "$${BASH_SOURCE[0]}")" && pwd)"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Detect OS' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'OS=$$(uname -s | tr "[:upper:]" "[:lower:]")' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Detect architecture' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'ARCH=$$(uname -m)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Map architecture names to Go convention' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'case "$$ARCH" in' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    x86_64)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ARCH="amd64"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ;;' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    aarch64)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ARCH="arm64"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ;;' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    arm64)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ARCH="arm64"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ;;' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    *)' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        echo "Unsupported architecture: $$ARCH" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        exit 1' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '        ;;' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'esac' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Construct binary name' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'BINARY="$$SCRIPT_DIR/$(BINARY_NAME)-$$OS-$$ARCH"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Check if binary exists' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'if [ ! -f "$$BINARY" ]; then' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    echo "Error: Binary not found for platform $$OS-$$ARCH" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    echo "Expected: $$BINARY" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    echo "" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    echo "Available binaries:" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    ls -1 "$$SCRIPT_DIR"/$(BINARY_NAME)-* 2>/dev/null | sed "s|^|  |" >&2' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '    exit 1' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'fi' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo '# Execute the binary with all arguments' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo 'exec "$$BINARY" "$$@"' >> $(BUILD_DIR)/$(BINARY_NAME).sh
-	@chmod +x $(BUILD_DIR)/$(BINARY_NAME).sh
-	@echo "✓ Created launcher script: $(BUILD_DIR)/$(BINARY_NAME).sh"
+rebuild-all: clean-all build-all
 
 # Generate go.sum
 $(GO_SUM_PATH): $(GO_MOD_PATH)
 	@echo "Downloading dependencies..."
-ifeq ($(HAS_SRC_DIR),yes)
-	@cd $(SRC_DIR) && go mod download
-	@cd $(SRC_DIR) && go mod tidy
-	@touch $(GO_SUM_PATH)
-else
 	@go mod download
 	@go mod tidy
 	@touch $(GO_SUM_PATH)
-endif
 	@echo "Dependencies downloaded"
 
-# Generate go.mod (only if it doesn't exist)
+# Initialize go.mod - dedicated target for module initialization
+init-mod:
+	@if [ -f "$(GO_MOD_PATH)" ]; then \
+		echo "go.mod already exists"; \
+	else \
+		echo "Initializing Go module $(MODULE_NAME)..."; \
+		go mod init $(MODULE_NAME); \
+		echo "✓ Created $(GO_MOD_PATH)"; \
+	fi
+
+# Initialize dependencies (go.mod + go.sum) - run after init-mod
+init-deps: init-mod
+	@echo "Downloading dependencies..."
+	@go mod download
+	@go mod tidy
+	@echo "✓ Dependencies downloaded and go.sum updated"
+
+# Generate go.mod (only if it doesn't exist) - implicit rule
 $(GO_MOD_PATH):
 	@echo "Initializing Go module..."
-ifeq ($(HAS_SRC_DIR),yes)
-	@cd $(SRC_DIR) && go mod init $(DEFAULT_BINARY_NAME)
-else
-	@go mod init $(DEFAULT_BINARY_NAME)
-endif
+	@go mod init $(MODULE_NAME)
 
 # Install binary (installs current platform binaries)
 install: build
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
 	@echo "Installing all commands for current platform ($(CURRENT_PLATFORM))..."
 ifndef TARGET
 	@mkdir -p $(DEFAULT_INSTALL_DIR)
@@ -239,30 +201,31 @@ ifndef TARGET
 			echo "Installing $(cmd) to $(DEFAULT_INSTALL_DIR)..."; \
 			cp $(BUILD_DIR)/$(cmd)-$(CURRENT_PLATFORM) $(DEFAULT_INSTALL_DIR)/$(cmd); \
 		fi;)
+ifeq ($(GOOS),darwin)
+	@echo "Signing binaries for macOS..."
+	@$(foreach cmd,$(COMMANDS), \
+		if [ -f "$(DEFAULT_INSTALL_DIR)/$(cmd)" ]; then \
+			codesign -f -s - $(DEFAULT_INSTALL_DIR)/$(cmd); \
+		fi;)
+endif
 else
 	@$(foreach cmd,$(COMMANDS), \
 		if [ -f "$(BUILD_DIR)/$(cmd)-$(CURRENT_PLATFORM)" ]; then \
 			echo "Installing $(cmd) to $(TARGET)..."; \
 			cp $(BUILD_DIR)/$(cmd)-$(CURRENT_PLATFORM) $(TARGET)/$(cmd); \
 		fi;)
-endif
-	@echo "Installation complete!"
-else
-ifndef TARGET
-	@mkdir -p $(DEFAULT_INSTALL_DIR)
-	@echo "Installing $(DEFAULT_BINARY_NAME) ($(CURRENT_PLATFORM)) to $(DEFAULT_INSTALL_DIR)..."
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) $(DEFAULT_INSTALL_DIR)/$(DEFAULT_BINARY_NAME)
-	@echo "Installation complete!"
-else
-	@echo "Installing $(DEFAULT_BINARY_NAME) ($(CURRENT_PLATFORM)) to $(TARGET)..."
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) $(TARGET)/$(DEFAULT_BINARY_NAME)
-	@echo "Installation complete!"
+ifeq ($(GOOS),darwin)
+	@echo "Signing binaries for macOS..."
+	@$(foreach cmd,$(COMMANDS), \
+		if [ -f "$(TARGET)/$(cmd)" ]; then \
+			codesign -f -s - $(TARGET)/$(cmd); \
+		fi;)
 endif
 endif
+	@echo "Installation complete!"
 
 # Install launcher scripts (for multi-platform distribution)
 install-launcher: build-all
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
 	@echo "Installing launcher scripts for all commands..."
 ifndef TARGET
 	@mkdir -p $(DEFAULT_INSTALL_DIR)
@@ -272,7 +235,14 @@ ifndef TARGET
 		mkdir -p $(DEFAULT_LIB_DIR)/$(cmd); \
 		cp $(BUILD_DIR)/$(cmd)-linux-amd64 $(DEFAULT_LIB_DIR)/$(cmd)/ 2>/dev/null || true; \
 		cp $(BUILD_DIR)/$(cmd)-darwin-amd64 $(DEFAULT_LIB_DIR)/$(cmd)/ 2>/dev/null || true; \
-		cp $(BUILD_DIR)/$(cmd)-darwin-arm64 $(DEFAULT_LIB_DIR)/$(cmd)/ 2>/dev/null || true;)
+		cp $(BUILD_DIR)/$(cmd)-darwin-arm64 $(DEFAULT_LIB_DIR)/$(cmd)/ 2>/dev/null || true; \
+		cp $(BUILD_DIR)/$(cmd)-windows-amd64.exe $(DEFAULT_LIB_DIR)/$(cmd)/ 2>/dev/null || true;)
+ifeq ($(GOOS),darwin)
+	@echo "Signing macOS binaries after install..."
+	@$(foreach cmd,$(COMMANDS), \
+		if [ -f "$(DEFAULT_LIB_DIR)/$(cmd)/$(cmd)-darwin-amd64" ]; then codesign -f -s - $(DEFAULT_LIB_DIR)/$(cmd)/$(cmd)-darwin-amd64; fi; \
+		if [ -f "$(DEFAULT_LIB_DIR)/$(cmd)/$(cmd)-darwin-arm64" ]; then codesign -f -s - $(DEFAULT_LIB_DIR)/$(cmd)/$(cmd)-darwin-arm64; fi;)
+endif
 else
 	@$(foreach cmd,$(COMMANDS), \
 		echo "Installing launcher for $(cmd) to $(TARGET)..."; \
@@ -280,28 +250,9 @@ else
 	@echo "Note: Platform binaries remain in $(BUILD_DIR)/"
 endif
 	@echo "Installation complete!"
-else
-ifndef TARGET
-	@mkdir -p $(DEFAULT_INSTALL_DIR)
-	@echo "Installing launcher script to $(DEFAULT_INSTALL_DIR)/$(DEFAULT_BINARY_NAME)..."
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME).sh $(DEFAULT_INSTALL_DIR)/$(DEFAULT_BINARY_NAME)
-	@echo "Installing platform binaries to $(DEFAULT_LIB_DIR)/$(DEFAULT_BINARY_NAME)/..."
-	@mkdir -p $(DEFAULT_LIB_DIR)/$(DEFAULT_BINARY_NAME)
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-linux-amd64 $(DEFAULT_LIB_DIR)/$(DEFAULT_BINARY_NAME)/
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-amd64 $(DEFAULT_LIB_DIR)/$(DEFAULT_BINARY_NAME)/
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-darwin-arm64 $(DEFAULT_LIB_DIR)/$(DEFAULT_BINARY_NAME)/
-	@echo "Installation complete!"
-else
-	@echo "Installing launcher script to $(TARGET)/$(DEFAULT_BINARY_NAME)..."
-	@cp $(BUILD_DIR)/$(DEFAULT_BINARY_NAME).sh $(TARGET)/$(DEFAULT_BINARY_NAME)
-	@echo "Note: Platform binaries remain in $(BUILD_DIR)/"
-	@echo "Installation complete!"
-endif
-endif
 
 # Uninstall binaries
 uninstall:
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
 	@echo "Uninstalling all commands..."
 	@$(foreach cmd,$(COMMANDS), \
 		BINARY_PATH=$$(which $(cmd) 2>/dev/null); \
@@ -318,33 +269,6 @@ ifeq ($(HAS_MULTIPLE_CMDS),yes)
 			fi; \
 		fi;)
 	@echo "Uninstallation complete!"
-else
-	@echo "Looking for $(DEFAULT_BINARY_NAME) in system..."
-	@BINARY_PATH=$$(which $(DEFAULT_BINARY_NAME) 2>/dev/null); \
-	if [ -z "$$BINARY_PATH" ]; then \
-		echo "$(DEFAULT_BINARY_NAME) not found in PATH"; \
-		exit 0; \
-	fi; \
-	if [ -f "$$BINARY_PATH" ]; then \
-		if [ "$$(basename $$(dirname $$BINARY_PATH))" = "bin" ]; then \
-			echo "Found $(DEFAULT_BINARY_NAME) at $$BINARY_PATH"; \
-			echo "Removing..."; \
-			rm -f "$$BINARY_PATH" 2>/dev/null || sudo rm -f "$$BINARY_PATH"; \
-			if [ -d "/usr/local/lib/$(DEFAULT_BINARY_NAME)" ]; then \
-				echo "Removing platform binaries from /usr/local/lib..."; \
-				sudo rm -rf "/usr/local/lib/$(DEFAULT_BINARY_NAME)"; \
-			fi; \
-			if [ -d "$(HOME)/.local/lib/$(DEFAULT_BINARY_NAME)" ]; then \
-				echo "Removing platform binaries from ~/.local/lib..."; \
-				rm -rf "$(HOME)/.local/lib/$(DEFAULT_BINARY_NAME)"; \
-			fi; \
-			echo "Uninstallation complete!"; \
-		else \
-			echo "$(DEFAULT_BINARY_NAME) found at $$BINARY_PATH but not in a standard bin directory"; \
-			echo "Please remove it manually if needed"; \
-		fi; \
-	fi
-endif
 
 # Clean build artifacts
 clean:
@@ -359,14 +283,10 @@ clean-all: clean
 	@rm -f $(GO_MOD_PATH) $(GO_SUM_PATH)
 	@echo "Clean complete!"
 
-# Run unit tests
+# Run Go unit tests only
 test-unit:
-	@echo "Running unit tests..."
-ifeq ($(HAS_SRC_DIR),yes)
-	@cd $(SRC_DIR) && go test -v ./...
-else
+	@echo "Running Go unit tests..."
 	@go test -v ./...
-endif
 
 # Run tests (alias for test-unit)
 test: test-unit
@@ -374,24 +294,21 @@ test: test-unit
 # Run all tests (unit + E2E)
 test-all: test-unit e2e
 
+# Run E2E tests (requires GEMINI_API_KEY and built binaries)
+e2e: build
+	@echo "Running E2E tests..."
+	@go test -v -tags=e2e -timeout 300s ./...
+
 # Format code
 fmt:
 	@echo "Formatting code..."
-ifeq ($(HAS_SRC_DIR),yes)
-	@cd $(SRC_DIR) && go fmt ./...
-else
 	@go fmt ./...
-endif
 	@echo "Format complete!"
 
 # Run go vet
 vet:
 	@echo "Running go vet..."
-ifeq ($(HAS_SRC_DIR),yes)
-	@cd $(SRC_DIR) && go vet ./...
-else
 	@go vet ./...
-endif
 	@echo "Vet complete!"
 
 # Run linter (golangci-lint if available, otherwise fallback to vet)
@@ -412,10 +329,9 @@ check: fmt vet lint test
 
 # Run the application (passes arguments via ARGS and CMD variables)
 run: build
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
 ifndef CMD
-	@echo "Error: Multi-command project detected. Please specify CMD variable."
-	@echo "Example: make run CMD=mycommand ARGS='--help'"
+	@echo "Error: Please specify CMD variable."
+	@echo "Example: make run CMD=agent ARGS='--help'"
 	@echo "Available commands:"
 	@$(foreach cmd,$(COMMANDS),echo "  - $(cmd)";)
 	@exit 1
@@ -423,90 +339,66 @@ else
 	@echo "Running $(CMD)..."
 	@$(BUILD_DIR)/$(CMD)-$(CURRENT_PLATFORM) $(ARGS)
 endif
-else
-	@echo "Running $(DEFAULT_BINARY_NAME)..."
-	@$(BUILD_DIR)/$(DEFAULT_BINARY_NAME)-$(CURRENT_PLATFORM) $(ARGS)
-endif
 
-# List all available commands (for multi-command projects)
+# List all available commands
 list-commands:
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
 	@echo "Available commands in this project:"
 	@$(foreach cmd,$(COMMANDS),echo "  - $(cmd)";)
-else
-	@echo "Single-command project: $(DEFAULT_BINARY_NAME)"
-endif
 
-# Build Docker image
-docker: docker-build
-
-# Build Docker image (alias)
-docker-build:
-	@echo "Building Docker image..."
-	@docker build -t agent-stop-and-go .
-	@echo "Docker image built: agent-stop-and-go"
-
-# Push Docker image
-docker-push:
-	@echo "Pushing Docker image..."
-	@docker push agent-stop-and-go
-	@echo "Docker image pushed: agent-stop-and-go"
-
-# Run Docker container
-docker-run: docker-build
-	@echo "Running Docker container..."
-	@docker run --rm -p 8080:8080 -v $(PWD)/config:/app/config -e GEMINI_API_KEY=$(GEMINI_API_KEY) -e ANTHROPIC_API_KEY=$(ANTHROPIC_API_KEY) agent-stop-and-go
-
-# Start multi-agent Docker Compose stack
-run-up:
+# Start services with docker compose
+run-up: docker-build
+	@echo "Starting services..."
 	@mkdir -p logs
 	@export LOG_SESSION=$$(date +%Y%m%d%H%M%S)_$$(openssl rand -hex 4); \
 	echo "Log session: $$LOG_SESSION (logs/ directory)"; \
-	LOG_SESSION=$$LOG_SESSION docker-compose up --build
+	PROJECT_NAME=$(PROJECT_NAME) DOCKER_PREFIX=$(MAKE_DOCKER_PREFIX) DOCKER_TAG=$(DOCKER_TAG) \
+	LOG_SESSION=$$LOG_SESSION docker compose up
+
+# Stop services with docker compose
+run-down:
+	@echo "Stopping services..."
+	@PROJECT_NAME=$(PROJECT_NAME) DOCKER_PREFIX=$(MAKE_DOCKER_PREFIX) DOCKER_TAG=$(DOCKER_TAG) docker compose down
+	@echo "Services stopped!"
 
 compose-up: run-up
 
-# Stop multi-agent Docker Compose stack
-run-down:
-	@echo "Stopping Docker Compose stack..."
-	@docker-compose down
-
 compose-down: run-down
 
-# Initialize Go module (only if go.mod doesn't exist)
-init-mod:
-	@if [ ! -f $(GO_MOD_PATH) ]; then \
-		echo "Initializing Go module..."; \
-		go mod init $(DEFAULT_BINARY_NAME); \
-	else \
-		echo "go.mod already exists"; \
-	fi
+# Build and push all Docker images (linux-amd64)
+docker: docker-build docker-push
 
-# Install/update dependencies
-init-deps:
-	@echo "Installing dependencies..."
-	@go mod download
-	@go mod tidy
-	@echo "Dependencies installed"
+# Build Docker images for all commands
+docker-build:
+	@for cmd in $(COMMANDS); do \
+		echo "Building Docker image: $(MAKE_DOCKER_PREFIX)$(PROJECT_NAME)-$$cmd:$(DOCKER_TAG)"; \
+		docker build -t $(MAKE_DOCKER_PREFIX)$(PROJECT_NAME)-$$cmd:$(DOCKER_TAG) \
+			--build-arg GO_BIN=$$cmd \
+			--build-arg HAS_INTERNAL=$(HAS_INTERNAL) \
+			--build-arg HAS_DATA=$(HAS_DATA) \
+			.; \
+	done
 
-# Run E2E tests (requires GEMINI_API_KEY and built binaries)
-e2e: build
-	@echo "Setting up MCP binary symlink..."
-	@ln -sf mcp-resources-$(CURRENT_PLATFORM) $(BUILD_DIR)/mcp-resources
-	@echo "Running E2E tests..."
-	@go test -v -tags=e2e -timeout 300s ./...
+# Push Docker images for all commands
+docker-push:
+	@for cmd in $(COMMANDS); do \
+		echo "Pushing: $(MAKE_DOCKER_PREFIX)$(PROJECT_NAME)-$$cmd:$(DOCKER_TAG)"; \
+		docker push $(MAKE_DOCKER_PREFIX)$(PROJECT_NAME)-$$cmd:$(DOCKER_TAG); \
+	done
+
+# Run Docker container (single agent)
+docker-run: docker-build
+	@echo "Running Docker container..."
+	@docker run --rm -p 8080:8080 \
+		-v $(PWD)/config:/app/config \
+		-e GEMINI_API_KEY=$(GEMINI_API_KEY) \
+		-e ANTHROPIC_API_KEY=$(ANTHROPIC_API_KEY) \
+		$(MAKE_DOCKER_PREFIX)$(PROJECT_NAME)-agent:$(DOCKER_TAG)
 
 # Show current platform info
 info:
 	@echo "Current platform: $(CURRENT_PLATFORM)"
 	@echo "Build directory: $(BUILD_DIR)"
-	@echo "Project structure: $(SRC_DIR)"
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
-	@echo "Multi-command project: yes"
 	@echo "Commands: $(COMMANDS)"
-else
-	@echo "Binary name: $(DEFAULT_BINARY_NAME)"
-endif
 
 # Help
 help:
@@ -514,53 +406,56 @@ help:
 	@echo "  build            - Build binaries for current platform ($(CURRENT_PLATFORM))"
 	@echo "  build-all        - Build for all platforms and create launcher scripts"
 	@echo "  run              - Build and run the binary"
-	@echo "  rebuild          - Clean and rebuild"
-	@echo "  rebuild-all      - Clean all (including go.mod/go.sum) and rebuild"
+	@echo "  rebuild          - Clean all and rebuild for current platform"
+	@echo "  rebuild-all      - Clean all and rebuild for all platforms"
 	@echo "  install          - Install current platform binaries (root: /usr/local/bin, user: ~/.local/bin, or TARGET)"
 	@echo "  install-launcher - Install launcher scripts with all platform binaries"
 	@echo "  uninstall        - Remove installed binaries"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  clean-all        - Remove build artifacts, go.mod, and go.sum"
-	@echo "  test             - Run unit tests"
-	@echo "  test-unit        - Run unit tests"
+	@echo "  init-mod         - Initialize go.mod with module name (uses MODULE_NAME)"
+	@echo "  init-deps        - Initialize go.mod and download dependencies"
+	@echo "  test             - Run Go unit tests"
+	@echo "  test-unit        - Run Go unit tests"
 	@echo "  test-all         - Run all tests (unit + E2E)"
 	@echo "  e2e              - Run E2E tests (requires GEMINI_API_KEY)"
 	@echo "  fmt              - Format code"
 	@echo "  vet              - Run go vet"
 	@echo "  lint             - Run golangci-lint (or go vet if not installed)"
 	@echo "  check            - Run fmt, vet, lint, and test"
-	@echo "  docker-build     - Build Docker image"
-	@echo "  docker-push      - Push Docker image"
-	@echo "  docker-run       - Build and run Docker container"
-	@echo "  run-up           - Start Docker Compose stack"
-	@echo "  run-down         - Stop Docker Compose stack"
-	@echo "  init-mod         - Initialize Go module"
-	@echo "  init-deps        - Install/update dependencies"
+	@echo "  run-up           - Build Docker images and start docker compose"
+	@echo "  run-down         - Stop docker compose services"
+	@echo "  docker           - Build and push Docker images (linux-amd64)"
+	@echo "  docker-build     - Build Docker images for all commands"
+	@echo "  docker-push      - Push Docker images to registry"
+	@echo "  docker-run       - Build and run single agent Docker container"
 	@echo "  list-commands    - List all available commands (multi-command projects)"
 	@echo "  info             - Show current platform and project information"
 	@echo "  help             - Show this help message"
 	@echo ""
-ifeq ($(HAS_MULTIPLE_CMDS),yes)
-	@echo "Multi-command project detected. Available commands:"
+	@echo "Available commands:"
 	@$(foreach cmd,$(COMMANDS),echo "  - $(cmd)";)
 	@echo ""
 	@echo "Examples:"
 	@echo "  make build                     - Build all commands for current platform"
 	@echo "  make build-all                 - Build all commands for all platforms"
-	@echo "  make run CMD=mycommand         - Run specific command"
-	@echo "  make run CMD=mycommand ARGS='--help' - Run with arguments"
+	@echo "  make run CMD=agent             - Run agent command"
+	@echo "  make run CMD=agent ARGS='--help' - Run with arguments"
 	@echo "  make install                   - Install all commands for current platform"
 	@echo "  make install-launcher          - Install launcher scripts for all commands"
-else
-	@echo "Examples:"
-	@echo "  make run                       - Run with no arguments"
-	@echo "  make run ARGS='--help'         - Run with --help flag"
-	@echo "  make run ARGS='arg1 arg2'      - Run with multiple arguments"
-endif
 	@echo ""
 	@echo "Platform-specific binaries are created in $(BUILD_DIR)/ with suffixes:"
-	@echo "  -linux-amd64   - Linux (Intel/AMD 64-bit)"
-	@echo "  -darwin-amd64  - macOS (Intel)"
-	@echo "  -darwin-arm64  - macOS (Apple Silicon)"
+	@echo "  -linux-amd64        - Linux (Intel/AMD 64-bit)"
+	@echo "  -darwin-amd64       - macOS (Intel)"
+	@echo "  -darwin-arm64       - macOS (Apple Silicon)"
+	@echo "  -windows-amd64.exe  - Windows (Intel/AMD 64-bit)"
 	@echo ""
 	@echo "Launcher scripts (.sh) automatically detect platform and execute the right binary."
+	@echo ""
+	@echo "Configuration variables:"
+	@echo "  MODULE_NAME        - Go module name (default: $(MODULE_NAME))"
+	@echo "                       Override with: make init-mod MODULE_NAME=github.com/myorg/myproject"
+	@echo "  MAKE_DOCKER_PREFIX - Docker registry prefix (default: empty)"
+	@echo "                       Example: MAKE_DOCKER_PREFIX=gcr.io/my-project/ make docker"
+	@echo "  DOCKER_TAG         - Docker image tag (default: latest)"
+	@echo "                       Example: DOCKER_TAG=v1.0.0 make docker"

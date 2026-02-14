@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -12,51 +12,19 @@ import (
 	"regexp"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	"net/http"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+	_ "modernc.org/sqlite"
+	"gopkg.in/yaml.v3"
 )
 
-// JSON-RPC types.
-type Request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      any             `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type Response struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Result  any       `json:"result,omitempty"`
-	Error   *RPCError `json:"error,omitempty"`
-}
-
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// MCP types.
-type Tool struct {
-	Name            string      `json:"name"`
-	Description     string      `json:"description"`
-	InputSchema     InputSchema `json:"inputSchema"`
-	DestructiveHint bool        `json:"destructiveHint,omitempty"`
-}
-
-type InputSchema struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties,omitempty"`
-	Required   []string            `json:"required,omitempty"`
-}
-
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description,omitempty"`
-}
-
-type ContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+// Config holds the mcp-resources server configuration.
+type Config struct {
+	Host   string `yaml:"host"`
+	Port   int    `yaml:"port"`
+	DBPath string `yaml:"db_path"`
 }
 
 // Resource represents a managed resource.
@@ -68,43 +36,111 @@ type Resource struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// Server is the MCP resources server.
-type Server struct {
-	db     *sql.DB
-	tools  []Tool
-	reader *bufio.Reader
-}
-
 func main() {
-	dbPath := flag.String("db", "./resources.db", "path to SQLite database")
+	configPath := flag.String("config", "", "path to YAML config file")
+	dbPath := flag.String("db", "", "path to SQLite database (overrides config)")
 	flag.Parse()
 
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(*dbPath), 0755); err != nil {
+	cfg := Config{
+		Host:   "0.0.0.0",
+		Port:   8090,
+		DBPath: "./data/resources.db",
+	}
+
+	// Load config from file if provided
+	if *configPath != "" {
+		data, err := os.ReadFile(*configPath)
+		if err != nil {
+			log.Fatalf("Failed to read config file: %v", err)
+		}
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			log.Fatalf("Failed to parse config file: %v", err)
+		}
+	}
+
+	// CLI flag overrides config
+	if *dbPath != "" {
+		cfg.DBPath = *dbPath
+	}
+
+	// Defaults
+	if cfg.Host == "" {
+		cfg.Host = "0.0.0.0"
+	}
+	if cfg.Port == 0 {
+		cfg.Port = 8090
+	}
+
+	// Ensure database directory exists
+	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0755); err != nil {
 		log.Fatalf("Failed to create database directory: %v", err)
 	}
 
-	db, err := sql.Open("sqlite3", *dbPath)
+	db, err := sql.Open("sqlite", cfg.DBPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
 
-	server := &Server{
-		db:     db,
-		reader: bufio.NewReader(os.Stdin),
-	}
-
-	if err := server.initDB(); err != nil {
+	if err := initDB(db); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	server.initTools()
-	server.run()
+	// Create MCP server
+	mcpServer := server.NewMCPServer("mcp-resources", "1.0.0",
+		server.WithToolCapabilities(true),
+	)
+
+	// Register tools
+	mcpServer.AddTool(
+		mcp.NewTool("resources_add",
+			mcp.WithDescription("Add a new resource with a name and integer value"),
+			mcp.WithString("name", mcp.Required(), mcp.Description("The name of the resource")),
+			mcp.WithNumber("value", mcp.Required(), mcp.Description("The integer value of the resource")),
+			mcp.WithDestructiveHintAnnotation(true),
+		),
+		makeToolAdd(db),
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("resources_remove",
+			mcp.WithDescription("Remove resources by ID or by name pattern (regex)"),
+			mcp.WithString("id", mcp.Description("The ID of the resource to remove")),
+			mcp.WithString("pattern", mcp.Description("Regex pattern to match resource names to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
+		),
+		makeToolRemove(db),
+	)
+
+	mcpServer.AddTool(
+		mcp.NewTool("resources_list",
+			mcp.WithDescription("List resources, optionally filtered by name pattern (regex)"),
+			mcp.WithString("pattern", mcp.Description("Optional regex pattern to filter resource names")),
+			mcp.WithReadOnlyHintAnnotation(true),
+		),
+		makeToolList(db),
+	)
+
+	// Start Streamable HTTP server with health endpoint
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	log.Printf("Starting mcp-resources on %s (db: %s)", addr, cfg.DBPath)
+
+	httpServer := server.NewStreamableHTTPServer(mcpServer)
+
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", httpServer)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "ok")
+	})
+
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Fatalf("Server error: %v", err)
+	}
 }
 
-func (s *Server) initDB() error {
-	_, err := s.db.Exec(`
+func initDB(db *sql.DB) error {
+	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS resources (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -116,284 +152,136 @@ func (s *Server) initDB() error {
 	return err
 }
 
-func (s *Server) initTools() {
-	s.tools = []Tool{
-		{
-			Name:            "resources_add",
-			Description:     "Add a new resource with a name and integer value",
-			DestructiveHint: true,
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]Property{
-					"name":  {Type: "string", Description: "The name of the resource"},
-					"value": {Type: "integer", Description: "The integer value of the resource"},
-				},
-				Required: []string{"name", "value"},
-			},
-		},
-		{
-			Name:            "resources_remove",
-			Description:     "Remove resources by ID or by name pattern (regex)",
-			DestructiveHint: true,
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]Property{
-					"id":      {Type: "string", Description: "The ID of the resource to remove"},
-					"pattern": {Type: "string", Description: "Regex pattern to match resource names to remove"},
-				},
-			},
-		},
-		{
-			Name:            "resources_list",
-			Description:     "List resources, optionally filtered by name pattern (regex)",
-			DestructiveHint: false,
-			InputSchema: InputSchema{
-				Type: "object",
-				Properties: map[string]Property{
-					"pattern": {Type: "string", Description: "Optional regex pattern to filter resource names"},
-				},
-			},
-		},
-	}
-}
+func makeToolAdd(db *sql.DB) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name := req.GetString("name", "")
+		if name == "" {
+			return mcp.NewToolResultError("name is required"), nil
+		}
 
-func (s *Server) run() {
-	for {
-		line, err := s.reader.ReadBytes('\n')
+		value := req.GetInt("value", 0)
+
+		id := generateID()
+		now := time.Now().UTC().Format(time.RFC3339)
+
+		_, err := db.Exec(
+			"INSERT INTO resources (id, name, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+			id, name, value, now, now,
+		)
 		if err != nil {
-			return
+			return mcp.NewToolResultError(fmt.Sprintf("failed to add resource: %v", err)), nil
 		}
 
-		var req Request
-		if err := json.Unmarshal(line, &req); err != nil {
-			s.sendError(nil, -32700, "Parse error")
-			continue
+		result := Resource{
+			ID:        id,
+			Name:      name,
+			Value:     value,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		text, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(text)), nil
+	}
+}
+
+func makeToolRemove(db *sql.DB) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		id := req.GetString("id", "")
+		pattern := req.GetString("pattern", "")
+
+		if id == "" && pattern == "" {
+			return mcp.NewToolResultError("either id or pattern is required"), nil
 		}
 
-		s.handleRequest(&req)
+		var removed []string
+
+		if id != "" {
+			result, err := db.Exec("DELETE FROM resources WHERE id = ?", id)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to remove resource: %v", err)), nil
+			}
+			affected, _ := result.RowsAffected()
+			if affected > 0 {
+				removed = append(removed, id)
+			}
+		}
+
+		if pattern != "" {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid pattern: %v", err)), nil
+			}
+
+			rows, err := db.Query("SELECT id, name FROM resources")
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("failed to query resources: %v", err)), nil
+			}
+			defer rows.Close()
+
+			var toRemove []string
+			for rows.Next() {
+				var resID, name string
+				if err := rows.Scan(&resID, &name); err != nil {
+					continue
+				}
+				if re.MatchString(name) {
+					toRemove = append(toRemove, resID)
+				}
+			}
+
+			for _, resID := range toRemove {
+				_, err := db.Exec("DELETE FROM resources WHERE id = ?", resID)
+				if err == nil {
+					removed = append(removed, resID)
+				}
+			}
+		}
+
+		result := map[string]any{
+			"removed_count": len(removed),
+			"removed_ids":   removed,
+		}
+		text, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(text)), nil
 	}
 }
 
-func (s *Server) handleRequest(req *Request) {
-	switch req.Method {
-	case "initialize":
-		s.handleInitialize(req)
-	case "notifications/initialized":
-		// No response needed for notifications
-	case "tools/list":
-		s.handleToolsList(req)
-	case "tools/call":
-		s.handleToolsCall(req)
-	default:
-		s.sendError(req.ID, -32601, "Method not found: "+req.Method)
-	}
-}
+func makeToolList(db *sql.DB) server.ToolHandlerFunc {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		pattern := req.GetString("pattern", "")
 
-func (s *Server) handleInitialize(req *Request) {
-	result := map[string]any{
-		"protocolVersion": "2024-11-05",
-		"serverInfo": map[string]string{
-			"name":    "mcp-resources",
-			"version": "1.0.0",
-		},
-		"capabilities": map[string]any{
-			"tools": map[string]any{},
-		},
-	}
-	s.sendResult(req.ID, result)
-}
-
-func (s *Server) handleToolsList(req *Request) {
-	result := map[string]any{
-		"tools": s.tools,
-	}
-	s.sendResult(req.ID, result)
-}
-
-func (s *Server) handleToolsCall(req *Request) {
-	var params struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-	}
-	if err := json.Unmarshal(req.Params, &params); err != nil {
-		s.sendError(req.ID, -32602, "Invalid params")
-		return
-	}
-
-	var result any
-	var err error
-
-	switch params.Name {
-	case "resources_add":
-		result, err = s.toolAdd(params.Arguments)
-	case "resources_remove":
-		result, err = s.toolRemove(params.Arguments)
-	case "resources_list":
-		result, err = s.toolList(params.Arguments)
-	default:
-		s.sendError(req.ID, -32602, "Unknown tool: "+params.Name)
-		return
-	}
-
-	if err != nil {
-		s.sendResult(req.ID, map[string]any{
-			"content": []ContentBlock{{Type: "text", Text: "Error: " + err.Error()}},
-			"isError": true,
-		})
-		return
-	}
-
-	text, _ := json.MarshalIndent(result, "", "  ")
-	s.sendResult(req.ID, map[string]any{
-		"content": []ContentBlock{{Type: "text", Text: string(text)}},
-	})
-}
-
-func (s *Server) toolAdd(args map[string]any) (any, error) {
-	name, ok := args["name"].(string)
-	if !ok || name == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-
-	valueFloat, ok := args["value"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("value is required and must be an integer")
-	}
-	value := int(valueFloat)
-
-	id := generateID()
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	_, err := s.db.Exec(
-		"INSERT INTO resources (id, name, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-		id, name, value, now, now,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to add resource: %w", err)
-	}
-
-	return Resource{
-		ID:        id,
-		Name:      name,
-		Value:     value,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}, nil
-}
-
-func (s *Server) toolRemove(args map[string]any) (any, error) {
-	id, hasID := args["id"].(string)
-	pattern, hasPattern := args["pattern"].(string)
-
-	if !hasID && !hasPattern {
-		return nil, fmt.Errorf("either id or pattern is required")
-	}
-
-	var removed []string
-
-	if hasID && id != "" {
-		result, err := s.db.Exec("DELETE FROM resources WHERE id = ?", id)
+		rows, err := db.Query("SELECT id, name, value, created_at, updated_at FROM resources ORDER BY name")
 		if err != nil {
-			return nil, fmt.Errorf("failed to remove resource: %w", err)
-		}
-		affected, _ := result.RowsAffected()
-		if affected > 0 {
-			removed = append(removed, id)
-		}
-	}
-
-	if hasPattern && pattern != "" {
-		re, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid pattern: %w", err)
-		}
-
-		rows, err := s.db.Query("SELECT id, name FROM resources")
-		if err != nil {
-			return nil, fmt.Errorf("failed to query resources: %w", err)
+			return mcp.NewToolResultError(fmt.Sprintf("failed to query resources: %v", err)), nil
 		}
 		defer rows.Close()
 
-		var toRemove []string
+		var re *regexp.Regexp
+		if pattern != "" {
+			re, err = regexp.Compile(pattern)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("invalid pattern: %v", err)), nil
+			}
+		}
+
+		var resources []Resource
 		for rows.Next() {
-			var resID, name string
-			if err := rows.Scan(&resID, &name); err != nil {
+			var r Resource
+			if err := rows.Scan(&r.ID, &r.Name, &r.Value, &r.CreatedAt, &r.UpdatedAt); err != nil {
 				continue
 			}
-			if re.MatchString(name) {
-				toRemove = append(toRemove, resID)
+			if re == nil || re.MatchString(r.Name) {
+				resources = append(resources, r)
 			}
 		}
 
-		for _, resID := range toRemove {
-			_, err := s.db.Exec("DELETE FROM resources WHERE id = ?", resID)
-			if err == nil {
-				removed = append(removed, resID)
-			}
+		result := map[string]any{
+			"resources": resources,
+			"count":     len(resources),
 		}
+		text, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(text)), nil
 	}
-
-	return map[string]any{
-		"removed_count": len(removed),
-		"removed_ids":   removed,
-	}, nil
-}
-
-func (s *Server) toolList(args map[string]any) (any, error) {
-	pattern, _ := args["pattern"].(string)
-
-	rows, err := s.db.Query("SELECT id, name, value, created_at, updated_at FROM resources ORDER BY name")
-	if err != nil {
-		return nil, fmt.Errorf("failed to query resources: %w", err)
-	}
-	defer rows.Close()
-
-	var re *regexp.Regexp
-	if pattern != "" {
-		re, err = regexp.Compile(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid pattern: %w", err)
-		}
-	}
-
-	var resources []Resource
-	for rows.Next() {
-		var r Resource
-		if err := rows.Scan(&r.ID, &r.Name, &r.Value, &r.CreatedAt, &r.UpdatedAt); err != nil {
-			continue
-		}
-		if re == nil || re.MatchString(r.Name) {
-			resources = append(resources, r)
-		}
-	}
-
-	return map[string]any{
-		"resources": resources,
-		"count":     len(resources),
-	}, nil
-}
-
-func (s *Server) sendResult(id any, result any) {
-	resp := Response{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result:  result,
-	}
-	s.send(resp)
-}
-
-func (s *Server) sendError(id any, code int, message string) {
-	resp := Response{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error:   &RPCError{Code: code, Message: message},
-	}
-	s.send(resp)
-}
-
-func (s *Server) send(resp Response) {
-	data, _ := json.Marshal(resp)
-	fmt.Println(string(data))
 }
 
 func generateID() string {

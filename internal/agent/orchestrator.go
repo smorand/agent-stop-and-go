@@ -90,6 +90,8 @@ type NodeResult struct {
 	ExitLoop        bool
 }
 
+const defaultLoopMaxIterations = 10
+
 var templateRegex = regexp.MustCompile(`\{(\w+)\}`)
 
 // resolveTemplate replaces {key} placeholders with values from session state.
@@ -217,7 +219,7 @@ func (a *Agent) executeParallel(ctx context.Context, node *config.AgentNode, sta
 func (a *Agent) executeLoop(ctx context.Context, node *config.AgentNode, state *SessionState, userMessage string, conv *conversation.Conversation, path []int) (*NodeResult, error) {
 	maxIter := node.MaxIterations
 	if maxIter == 0 {
-		maxIter = 10 // safety cap
+		maxIter = defaultLoopMaxIterations
 	}
 
 	var lastResult *NodeResult

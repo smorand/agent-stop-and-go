@@ -29,7 +29,6 @@ func main() {
 
 	ag := agent.New(cfg, store)
 
-	// Start the MCP server
 	if err := ag.Start(); err != nil {
 		log.Fatalf("Failed to start agent: %v", err)
 	}
@@ -52,7 +51,11 @@ func main() {
 	}()
 
 	log.Printf("Starting Agent Stop and Go API on %s:%d", cfg.Host, cfg.Port)
-	log.Printf("MCP Server: %s", cfg.MCP.Command)
+	if cfg.MCP.URL != "" {
+		log.Printf("MCP Server: %s", cfg.MCP.URL)
+	} else if cfg.MCP.Command != "" {
+		log.Printf("MCP Server: %s", cfg.MCP.Command)
+	}
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

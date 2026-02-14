@@ -9,8 +9,9 @@ import (
 
 // MCPConfig holds the MCP server configuration.
 type MCPConfig struct {
-	Command string   `yaml:"command"`
-	Args    []string `yaml:"args"`
+	URL     string   `yaml:"url"`     // Streamable HTTP endpoint
+	Command string   `yaml:"command"` // stdio subprocess command
+	Args    []string `yaml:"args"`    // stdio subprocess args
 }
 
 // LLMConfig holds the LLM configuration.

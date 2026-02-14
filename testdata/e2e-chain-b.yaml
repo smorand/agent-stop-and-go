@@ -9,10 +9,7 @@ llm:
   model: gemini-3-flash-preview
 
 mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/e2e_test_chain_b/resources.db
+  url: http://localhost:9290/mcp
 
 prompt: |
   You are a resource management agent. You MUST use tools to perform operations.

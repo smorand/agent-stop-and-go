@@ -13,7 +13,10 @@ import (
 	"agent-stop-and-go/internal/mcp"
 )
 
-const baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
+const (
+	baseURL           = "https://generativelanguage.googleapis.com/v1beta/models"
+	httpClientTimeout = 60 * time.Second
+)
 
 // GeminiClient handles communication with the Gemini API.
 type GeminiClient struct {
@@ -32,7 +35,7 @@ func NewGeminiClient(model string) (*GeminiClient, error) {
 	return &GeminiClient{
 		model:  model,
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{Timeout: httpClientTimeout},
 	}, nil
 }
 
