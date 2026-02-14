@@ -271,7 +271,12 @@ To create a different agent:
 
 ## MCP Server Protocol
 
-MCP servers communicate via JSON-RPC 2.0 over stdin/stdout:
+MCP servers communicate via JSON-RPC 2.0. Two transports are supported:
+
+- **Streamable HTTP** (preferred): The MCP server runs as a standalone HTTP service
+- **stdio** (legacy): The MCP server runs as a subprocess, communicating via stdin/stdout
+
+Multiple MCP servers can be configured simultaneously. A `CompositeClient` aggregates tools from all servers and routes calls to the correct sub-client.
 
 ```json
 // Request

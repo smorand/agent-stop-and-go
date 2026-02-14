@@ -28,7 +28,7 @@ graph TB
 
     subgraph "External Services"
         LLM["LLM Providers<br/>Gemini / Claude"]
-        MCP["MCP Server<br/>(mcp-resources)"]
+        MCP["MCP Servers<br/>(Streamable HTTP / stdio)"]
         A2ARemote["A2A Sub-Agents<br/>(HTTPS)"]
     end
 
@@ -49,8 +49,8 @@ graph TB
     Orch -->|"GenerateWithTools"| LLM
     Orch --> State
 
-    Simple -->|"JSON-RPC stdio"| MCP
-    Orch -->|"JSON-RPC stdio"| MCP
+    Simple -->|"MCP (HTTP/stdio)"| MCP
+    Orch -->|"MCP (HTTP/stdio)"| MCP
 
     Simple -->|"JSON-RPC HTTPS"| A2ARemote
     Orch -->|"JSON-RPC HTTPS"| A2ARemote
@@ -325,7 +325,7 @@ flowchart LR
 
 ## Key Design Decisions
 
-1. **JSON-RPC 2.0 everywhere**: Both MCP (over stdio) and A2A (over HTTPS) use the same protocol format, simplifying the codebase and enabling consistent error handling.
+1. **JSON-RPC 2.0 everywhere**: Both MCP (over Streamable HTTP or stdio) and A2A (over HTTPS) use the same protocol format, simplifying the codebase and enabling consistent error handling.
 
 2. **Tools as first-class LLM functions**: A2A agents appear as synthetic tools alongside MCP tools. The LLM makes the routing decision, not the application code.
 

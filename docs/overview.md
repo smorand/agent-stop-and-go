@@ -18,7 +18,7 @@ This enables building production-ready agent pipelines where humans remain in co
 | Feature | Description |
 |---------|-------------|
 | **Multi-LLM Support** | Supports Gemini and Claude models with automatic routing based on model name |
-| **MCP Tool Execution** | Agents call external tools via JSON-RPC 2.0 over stdio |
+| **MCP Tool Execution** | Agents call external tools via MCP Streamable HTTP (primary) or stdio (legacy), with multi-server aggregation |
 | **A2A Protocol** | Agents delegate tasks to other agents via JSON-RPC 2.0 over HTTPS |
 | **Approval Workflow** | Destructive operations require explicit human approval before execution |
 | **Agent Orchestration** | Compose agents into sequential, parallel, and loop pipelines |
@@ -32,14 +32,14 @@ This enables building production-ready agent pipelines where humans remain in co
 
 | Component | Technology |
 |-----------|------------|
-| Language | Go 1.23 |
+| Language | Go 1.24 |
 | Web Framework | [Fiber](https://gofiber.io/) v2 |
 | LLM Providers | Google Gemini API, Anthropic Claude API |
-| MCP Protocol | JSON-RPC 2.0 over stdio |
+| MCP Protocol | Streamable HTTP (primary) or stdio (legacy) via `github.com/mark3labs/mcp-go` |
 | A2A Protocol | JSON-RPC 2.0 over HTTPS |
 | Configuration | YAML (`gopkg.in/yaml.v3`) |
 | Conversation Storage | JSON files on disk |
-| MCP Resource Storage | SQLite (`github.com/mattn/go-sqlite3`) |
+| MCP Resource Storage | SQLite (`modernc.org/sqlite`, pure Go, no CGO) |
 | Unique IDs | `github.com/google/uuid` |
 | Build System | Make |
 | Container | Docker, Docker Compose |
@@ -48,7 +48,7 @@ This enables building production-ready agent pipelines where humans remain in co
 
 ### Prerequisites
 
-- Go 1.23 or later
+- Go 1.24 or later
 - Make
 - A Gemini API key (`GEMINI_API_KEY`) or Anthropic API key (`ANTHROPIC_API_KEY`)
 
@@ -110,7 +110,7 @@ agent-stop-and-go/
 │   ├── api/                       # HTTP handlers, routes, A2A server, docs
 │   ├── agent/                     # Core agent logic, orchestration engine
 │   ├── llm/                       # Multi-provider LLM clients (Gemini, Claude)
-│   ├── mcp/                       # MCP client (multi-server, HTTP + stdio)
+│   ├── mcp/                       # MCP client (multi-server via CompositeClient, HTTP + stdio)
 │   ├── a2a/                       # A2A JSON-RPC client (HTTPS)
 │   ├── auth/                      # Bearer token and session ID propagation
 │   ├── config/                    # YAML configuration loader
@@ -120,6 +120,8 @@ agent-stop-and-go/
 │   ├── agent.yaml                 # Default single-agent config
 │   ├── agent-a.yaml               # Docker Compose: orchestrator
 │   ├── agent-b.yaml               # Docker Compose: resource agent
+│   ├── mcp-resources.yaml         # MCP resources server config (local dev)
+│   ├── mcp-resources-compose.yaml # MCP resources server config (Docker Compose)
 │   ├── web.yaml                   # Web frontend config (local dev)
 │   └── web-compose.yaml           # Web frontend config (Docker Compose)
 ├── examples/                      # Ready-to-use configuration examples

@@ -183,55 +183,61 @@ Runs all quality checks in sequence: `fmt` -> `vet` -> `lint` -> `test`.
 
 ### Dockerfile Architecture
 
-The project uses a **multi-stage Docker build**:
+The project uses a **multi-stage Docker build** with conditional stages for flexible per-binary image creation:
 
 ```mermaid
 flowchart TD
-    A["Stage 1: Builder<br/>golang:1.23-bookworm"] --> B["Download dependencies<br/>(go mod download)"]
-    B --> C["Build agent binary<br/>(CGO_ENABLED=1 for SQLite)"]
-    B --> D["Build mcp-resources binary<br/>(CGO_ENABLED=1 for SQLite)"]
-    B --> E["Build web binary<br/>(CGO_ENABLED=0)"]
-    C --> F["Stage 2: Runtime<br/>debian:bookworm-slim"]
-    D --> F
+    A["Stage 1: Prebuild<br/>golang:1.24-alpine"] --> B["Install git + ca-certs<br/>Create appuser"]
+    B --> C{"HAS_INTERNAL arg?"}
+    C -->|"yes"| D["Copy internal/ directory"]
+    C -->|"no"| E["Empty internal/"]
+    D --> F["Download dependencies<br/>(go mod download)"]
     E --> F
-    F --> G["Install ca-certificates"]
-    G --> H["Create non-root user<br/>(appuser)"]
-    H --> I["Copy binaries + config"]
-    I --> J["EXPOSE 8080<br/>CMD agent --config agent.yaml"]
+    F --> G["Build binary<br/>(CGO_ENABLED=0)"]
+    G --> H["Stage 2: Runtime<br/>alpine:3.21"]
+    H --> I["Install ca-certificates"]
+    I --> J["Create non-root user<br/>(appuser)"]
+    J --> K["Copy binary + config"]
+    K --> L["EXPOSE 8080<br/>CMD app --config agent.yaml"]
 ```
 
 **Build details:**
 
-- Agent and mcp-resources require `CGO_ENABLED=1` (SQLite uses cgo)
-- Web binary uses `CGO_ENABLED=0` (no cgo dependencies)
+- All binaries use `CGO_ENABLED=0` (SQLite uses `modernc.org/sqlite`, a pure Go driver -- no CGO required)
 - All binaries use `-ldflags="-w -s"` to strip debug info and reduce size
-- The runtime image is `debian:bookworm-slim` (minimal Debian)
+- The build image is `golang:1.24-alpine`
+- The runtime image is `alpine:3.21` (minimal Alpine Linux)
 - Only `ca-certificates` is installed in the runtime image
+- The `GO_BIN` build arg selects which binary to build (agent, web, mcp-resources)
+- The `HAS_INTERNAL` build arg controls whether `internal/` is copied (not needed for mcp-resources)
 
 ### Docker Compose
 
-The `docker-compose.yaml` defines a three-service stack:
+The `docker-compose.yaml` defines a four-service stack:
 
 ```mermaid
 graph LR
-    Web["web<br/>:3000"] -->|"REST API"| AgentA["agent-a<br/>:8080<br/>(orchestrator)"]
+    Web["web<br/>:8080"] -->|"REST API"| AgentA["agent-a<br/>:8081<br/>(orchestrator)"]
     AgentA -->|"A2A JSON-RPC"| AgentB["agent-b<br/>:8082<br/>(resources)"]
+    AgentB -->|"MCP HTTP"| MCP["mcp-resources<br/>:8090<br/>(tools)"]
 ```
 
-| Service | Config File | Port | Role |
+| Service | Config File | Port (host:container) | Role |
 |---------|------------|------|------|
-| `agent-b` | `config/agent-b.yaml` | 8082 (internal) | Resource agent with MCP tools |
-| `agent-a` | `config/agent-a.yaml` | 8080 (exposed) | Orchestrator, delegates to agent-b |
-| `web` | `config/web-compose.yaml` | 3000 (exposed) | Browser-based chat UI |
+| `mcp-resources` | `config/mcp-resources-compose.yaml` | 8090:8080 | MCP Streamable HTTP server (SQLite resources) |
+| `agent-b` | `config/agent-b.yaml` | 8082:8080 | Resource agent, connects to mcp-resources |
+| `agent-a` | `config/agent-a.yaml` | 8081:8080 | Orchestrator, delegates to agent-b via A2A |
+| `web` | `config/web-compose.yaml` | 8080:8080 | Browser-based chat UI |
 
-**Startup order**: `agent-b` -> `agent-a` -> `web` (enforced by `depends_on`).
+**Startup order**: `mcp-resources` -> `agent-b` -> `agent-a` -> `web` (enforced by `depends_on` with health checks).
 
 **Volumes:**
 
 | Volume | Service | Purpose |
 |--------|---------|---------|
+| `mcp-resources-data` | mcp-resources | Persistent SQLite database storage |
 | `agent-a-data` | agent-a | Persistent conversation storage |
-| `agent-b-data` | agent-b | Persistent conversation and SQLite storage |
+| `agent-b-data` | agent-b | Persistent conversation storage |
 | `./logs` | all | Shared log directory (bind mount) |
 
 ## Logging
@@ -256,6 +262,7 @@ When running via `make compose-up`, each service writes its output to `./logs/` 
 
 ```
 logs/
+├── 20260213_143022_a1b2c3d4_mcp-resources.log
 ├── 20260213_143022_a1b2c3d4_agent-a.log
 ├── 20260213_143022_a1b2c3d4_agent-b.log
 └── 20260213_143022_a1b2c3d4_web.log
@@ -280,7 +287,8 @@ Dependencies are managed via `go.mod`. The project uses minimal dependencies:
 |------------|---------|---------|
 | `github.com/gofiber/fiber/v2` | v2.52.10 | HTTP web framework |
 | `github.com/google/uuid` | v1.6.0 | UUID generation |
-| `github.com/mattn/go-sqlite3` | v1.14.33 | SQLite driver (cgo) |
+| `modernc.org/sqlite` | v1.45.0 | SQLite driver (pure Go, no CGO) |
+| `github.com/mark3labs/mcp-go` | v0.43.2 | MCP Streamable HTTP client library |
 | `gopkg.in/yaml.v3` | v3.0.1 | YAML configuration parsing |
 
 ### Updating Dependencies

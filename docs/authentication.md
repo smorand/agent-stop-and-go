@@ -178,14 +178,19 @@ This ID will propagate to all downstream A2A agents.
 
 ### MCP Server Security
 
-The MCP server (`mcp-resources`) runs as a subprocess of the agent. It communicates exclusively via stdin/stdout and has no network exposure. It does not receive or process Bearer tokens.
+The MCP server (`mcp-resources`) can run in two modes:
+
+- **Streamable HTTP** (preferred): Runs as a standalone HTTP service. In Docker Compose, it runs as a separate container on the internal network. It does not receive or process Bearer tokens.
+- **stdio** (legacy): Runs as a subprocess of the agent. It communicates exclusively via stdin/stdout and has no network exposure.
+
+In both cases, the MCP server does not participate in authentication -- Bearer tokens are not forwarded to MCP servers.
 
 ### Docker Security
 
-- The runtime Docker container runs as a non-root user (`appuser`)
-- The Dockerfile creates a dedicated user group (`appuser:appuser`)
-- No shell is available in the container (`/sbin/nologin`)
-- Only `ca-certificates` is installed (for HTTPS connections)
+- The runtime Docker container runs as a non-root user (`appuser`, UID 10001)
+- The Dockerfile creates a dedicated user (`appuser:appuser`)
+- The user has no home directory and no login shell (`/sbin/nologin`)
+- The runtime image is `alpine:3.21` with only `ca-certificates` installed (for HTTPS connections)
 
 ### Secrets Management
 
