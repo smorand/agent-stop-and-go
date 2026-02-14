@@ -1,46 +1,105 @@
+# Docker Compose configuration
+# Images are built with: make docker-build
+# Start with: make run-up
+# Stop with: make run-down
 services:
-  agent-b:
-    build: .
+  mcp-resources:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-mcp-resources:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: mcp-resources
+        HAS_INTERNAL: "no"
     command: >
-      sh -c "/app/bin/agent --config /app/config/agent-b.yaml 2>&1
-      | tee /logs/${LOG_SESSION}_agent-b.log"
+      sh -c "/app/bin/app --config /app/config/mcp-resources-compose.yaml 2>&1 | tee /logs/${LOG_SESSION}_mcp-resources.log"
+
+    volumes:
+      - mcp-resources-data:/app/data
+      - ./logs:/logs
+    expose:
+      - "8080"
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+  agent-b:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-agent:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: agent
+        HAS_INTERNAL: "yes"
+    command: >
+      sh -c "/app/bin/app --config /app/config/agent-b.yaml 2>&1 | tee /logs/${LOG_SESSION}_agent-b.log"
+
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     volumes:
-      - agent-b-data:/app/data/agent-b
+      - agent-b-data:/app/data
       - ./logs:/logs
-    expose:
-      - "8082"
-
+    ports:
+      - "8082:8080"
+    depends_on:
+      mcp-resources:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
   agent-a:
-    build: .
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-agent:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: agent
+        HAS_INTERNAL: "yes"
     command: >
-      sh -c "/app/bin/agent --config /app/config/agent-a.yaml 2>&1
-      | tee /logs/${LOG_SESSION}_agent-a.log"
+      sh -c "/app/bin/app --config /app/config/agent-a.yaml 2>&1 | tee /logs/${LOG_SESSION}_agent-a.log"
+
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    ports:
+      - "8081:8080"
+    volumes:
+      - agent-a-data:/app/data
+      - ./logs:/logs
+    depends_on:
+      agent-b:
+        condition: service_healthy
+      mcp-resources:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+  web:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-web:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: web
+        HAS_INTERNAL: "yes"
+    command: >
+      sh -c "/app/bin/app --config /app/config/web-compose.yaml 2>&1 | tee /logs/${LOG_SESSION}_web.log"
+
     ports:
       - "8080:8080"
     volumes:
-      - agent-a-data:/app/data/agent-a
       - ./logs:/logs
     depends_on:
-      - agent-b
-
-  web:
-    build: .
-    command: >
-      sh -c "/app/bin/web --config /app/config/web-compose.yaml 2>&1
-      | tee /logs/${LOG_SESSION}_web.log"
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./logs:/logs
-    depends_on:
-      - agent-a
-
+      agent-a:
+        condition: service_healthy
 volumes:
+  mcp-resources-data:
   agent-a-data:
   agent-b-data:

@@ -22,7 +22,7 @@ const a2aToolPrefix = "a2a_"
 type Agent struct {
 	config     *config.Config
 	storage    *storage.Storage
-	mcpClient  *mcp.Client
+	mcpClient  mcp.Client
 	llmClient  llm.Client            // primary client (backward compat)
 	llmClients map[string]llm.Client // model -> client (for orchestrated agents)
 	llmMu      sync.Mutex            // protects llmClients map
@@ -42,14 +42,19 @@ func New(cfg *config.Config, store *storage.Storage) *Agent {
 
 // Start initializes the agent, starts the MCP server and LLM client.
 func (a *Agent) Start() error {
-	if a.config.MCP.Command == "" {
-		return fmt.Errorf("MCP server command not configured")
+	// Create MCP client from config (HTTP or stdio)
+	mcpClient, err := mcp.NewClient(mcp.ClientConfig{
+		URL:     a.config.MCP.URL,
+		Command: a.config.MCP.Command,
+		Args:    a.config.MCP.Args,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create MCP client: %w", err)
 	}
+	a.mcpClient = mcpClient
 
-	// Start MCP client
-	a.mcpClient = mcp.NewClient(a.config.MCP.Command, a.config.MCP.Args)
 	if err := a.mcpClient.Start(); err != nil {
-		return fmt.Errorf("failed to start MCP server: %w", err)
+		return fmt.Errorf("failed to start MCP client: %w", err)
 	}
 
 	// Initialize primary LLM client

@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	claudeBaseURL  = "https://api.anthropic.com/v1/messages"
+	claudeBaseURL   = "https://api.anthropic.com/v1/messages"
 	claudeMaxTokens = 4096
 )
 

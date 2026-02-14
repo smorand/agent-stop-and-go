@@ -9,6 +9,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,23 +22,52 @@ import (
 	"agent-stop-and-go/internal/storage"
 )
 
+// mcpResourcesBin returns the platform-specific mcp-resources binary path.
+func mcpResourcesBin() string {
+	return fmt.Sprintf("./bin/mcp-resources-%s-%s", runtime.GOOS, runtime.GOARCH)
+}
+
 const baseURL = "http://localhost:9090"
 
 var testAgent *agent.Agent
 
 func TestMain(m *testing.M) {
+	// Start mcp-resources as a separate HTTP server
+	mcpDBPath := "./data/e2e_test/resources.db"
+	os.MkdirAll("./data/e2e_test", 0755)
+	mcpCmd := exec.Command(mcpResourcesBin(), "--db", mcpDBPath)
+	mcpCmd.Stdout = os.Stderr
+	mcpCmd.Stderr = os.Stderr
+	if err := mcpCmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start mcp-resources: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait for mcp-resources to be ready
+	mcpReady := waitForHTTP("http://localhost:8090/mcp", 30)
+	if !mcpReady {
+		mcpCmd.Process.Kill()
+		fmt.Fprintf(os.Stderr, "mcp-resources failed to start within timeout\n")
+		os.Exit(1)
+	}
+
 	cfg, err := config.Load("config/agent.yaml")
 	if err != nil {
+		mcpCmd.Process.Kill()
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Override port for tests
+	// Override for tests
 	cfg.Port = 9090
 	cfg.DataDir = "./data/e2e_test"
+	cfg.MCP.URL = "http://localhost:8090/mcp"
+	cfg.MCP.Command = ""
+	cfg.MCP.Args = nil
 
 	store, err := storage.New(cfg.DataDir)
 	if err != nil {
+		mcpCmd.Process.Kill()
 		fmt.Fprintf(os.Stderr, "Failed to create storage: %v\n", err)
 		os.Exit(1)
 	}
@@ -44,6 +76,7 @@ func TestMain(m *testing.M) {
 	testAgent = ag
 
 	if err := ag.Start(); err != nil {
+		mcpCmd.Process.Kill()
 		fmt.Fprintf(os.Stderr, "Failed to start agent: %v\n", err)
 		os.Exit(1)
 	}
@@ -56,20 +89,8 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
-	// Wait for server to be ready
-	ready := false
-	for i := 0; i < 30; i++ {
-		resp, err := http.Get(baseURL + "/health")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				ready = true
-				break
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-
+	// Wait for agent server to be ready
+	ready := waitForHTTP(baseURL+"/health", 30)
 	if !ready {
 		fmt.Fprintf(os.Stderr, "Server failed to start within timeout\n")
 		os.Exit(1)
@@ -80,9 +101,24 @@ func TestMain(m *testing.M) {
 	// Cleanup
 	server.Shutdown()
 	ag.Stop()
+	mcpCmd.Process.Kill()
+	mcpCmd.Wait()
 	os.RemoveAll(cfg.DataDir)
 
 	os.Exit(code)
+}
+
+// waitForHTTP polls a URL until it responds (any status) or times out.
+func waitForHTTP(url string, maxAttempts int) bool {
+	for i := 0; i < maxAttempts; i++ {
+		resp, err := http.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
 }
 
 // httpJSON sends a request and decodes the JSON response.
@@ -842,4 +878,283 @@ func TestA2ATasksGet(t *testing.T) {
 	if task.Artifact == nil {
 		t.Fatal("Expected task to have an artifact")
 	}
+}
+
+// --- Error-path tests (deterministic, no LLM calls) ---
+
+// TestErrorGetConversationNotFound verifies 404 for a non-existent conversation.
+func TestErrorGetConversationNotFound(t *testing.T) {
+	result, status, err := httpJSON("GET", baseURL+"/conversations/nonexistent-id", nil)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if status != 404 {
+		t.Fatalf("Expected status 404, got %d", status)
+	}
+	if result["error"] == nil || result["error"] == "" {
+		t.Fatal("Expected error field in response")
+	}
+}
+
+// TestErrorSendMessageMalformedJSON verifies 400 for malformed JSON body.
+func TestErrorSendMessageMalformedJSON(t *testing.T) {
+	// Create a conversation first
+	createResult, _, err := httpJSON("POST", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("Create conversation failed: %v", err)
+	}
+	conv := createResult["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	// Send malformed JSON (can't use httpJSON which always produces valid JSON)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/conversations/%s/messages", baseURL, convID), strings.NewReader("{invalid json"))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("Expected status 400, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	errMsg, ok := result["error"].(string)
+	if !ok || !strings.HasPrefix(errMsg, "invalid request body:") {
+		t.Fatalf("Expected error starting with 'invalid request body:', got %q", errMsg)
+	}
+}
+
+// TestErrorSendMessageEmptyMessage verifies 400 for empty message.
+func TestErrorSendMessageEmptyMessage(t *testing.T) {
+	createResult, _, err := httpJSON("POST", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("Create conversation failed: %v", err)
+	}
+	conv := createResult["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	result, status, err := httpJSON("POST", fmt.Sprintf("%s/conversations/%s/messages", baseURL, convID), map[string]string{
+		"message": "",
+	})
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if status != 400 {
+		t.Fatalf("Expected status 400, got %d", status)
+	}
+	if result["error"] != "message is required" {
+		t.Fatalf("Expected 'message is required', got %v", result["error"])
+	}
+}
+
+// TestErrorSendMessageConversationNotFound verifies 404 for sending to non-existent conversation.
+func TestErrorSendMessageConversationNotFound(t *testing.T) {
+	result, status, err := httpJSON("POST", baseURL+"/conversations/bad-id/messages", map[string]string{
+		"message": "hello",
+	})
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if status != 404 {
+		t.Fatalf("Expected status 404, got %d", status)
+	}
+	if result["error"] == nil || result["error"] == "" {
+		t.Fatal("Expected error field in response")
+	}
+}
+
+// TestErrorApprovalNotFound verifies 404 for a non-existent approval UUID.
+func TestErrorApprovalNotFound(t *testing.T) {
+	result, status, err := httpJSON("POST", baseURL+"/approvals/00000000-0000-0000-0000-000000000000", map[string]string{
+		"answer": "yes",
+	})
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if status != 404 {
+		t.Fatalf("Expected status 404, got %d", status)
+	}
+	if result["error"] == nil || result["error"] == "" {
+		t.Fatal("Expected error field in response")
+	}
+}
+
+// TestErrorApprovalMalformedJSON verifies 400 for malformed JSON in approval.
+func TestErrorApprovalMalformedJSON(t *testing.T) {
+	req, err := http.NewRequest("POST", baseURL+"/approvals/some-uuid", strings.NewReader("{bad json"))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 400 {
+		t.Fatalf("Expected status 400, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(body, &result); err != nil {
+		t.Fatalf("Failed to parse response: %v", err)
+	}
+
+	errMsg, ok := result["error"].(string)
+	if !ok || !strings.HasPrefix(errMsg, "invalid request body:") {
+		t.Fatalf("Expected error starting with 'invalid request body:', got %q", errMsg)
+	}
+}
+
+// TestErrorA2AMalformedJSON verifies JSON-RPC parse error for malformed JSON.
+func TestErrorA2AMalformedJSON(t *testing.T) {
+	req, err := http.NewRequest("POST", baseURL+"/a2a", strings.NewReader("not json"))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var rpcResp a2a.Response
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		t.Fatalf("Failed to parse response: %v (body: %s)", err, body)
+	}
+
+	if rpcResp.Error == nil {
+		t.Fatal("Expected JSON-RPC error")
+	}
+	if rpcResp.Error.Code != -32700 {
+		t.Fatalf("Expected error code -32700, got %d", rpcResp.Error.Code)
+	}
+	if rpcResp.Error.Message != "Parse error" {
+		t.Fatalf("Expected 'Parse error', got %q", rpcResp.Error.Message)
+	}
+}
+
+// TestErrorA2AMethodNotFound verifies JSON-RPC error for unknown method.
+func TestErrorA2AMethodNotFound(t *testing.T) {
+	rpcResp, err := a2aRPC("nonexistent/method", nil)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if rpcResp.Error == nil {
+		t.Fatal("Expected JSON-RPC error")
+	}
+	if rpcResp.Error.Code != -32601 {
+		t.Fatalf("Expected error code -32601, got %d", rpcResp.Error.Code)
+	}
+	if rpcResp.Error.Message != "Method not found" {
+		t.Fatalf("Expected 'Method not found', got %q", rpcResp.Error.Message)
+	}
+}
+
+// TestErrorA2ATaskNotFound verifies JSON-RPC error for non-existent task.
+func TestErrorA2ATaskNotFound(t *testing.T) {
+	rpcResp, err := a2aRPC("tasks/get", a2a.TaskGetParams{ID: "nonexistent-task-id"})
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if rpcResp.Error == nil {
+		t.Fatal("Expected JSON-RPC error")
+	}
+	if rpcResp.Error.Code != -32602 {
+		t.Fatalf("Expected error code -32602, got %d", rpcResp.Error.Code)
+	}
+	if !strings.HasPrefix(rpcResp.Error.Message, "Task not found:") {
+		t.Fatalf("Expected error starting with 'Task not found:', got %q", rpcResp.Error.Message)
+	}
+}
+
+// --- Session ID propagation tests ---
+
+// TestSessionIDPropagation verifies session ID is stored and returned in conversations.
+func TestSessionIDPropagation(t *testing.T) {
+	t.Run("custom_session_id", func(t *testing.T) {
+		// Create conversation with custom X-Session-ID header
+		req, err := http.NewRequest("POST", baseURL+"/conversations", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		req.Header.Set("X-Session-ID", "test-sid-e2e-1234")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 201 {
+			t.Fatalf("Expected status 201, got %d", resp.StatusCode)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		var result map[string]any
+		if err := json.Unmarshal(body, &result); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+
+		conv := result["conversation"].(map[string]any)
+		convID := conv["id"].(string)
+
+		// Get the conversation and verify session_id
+		getResult, _, err := httpJSON("GET", fmt.Sprintf("%s/conversations/%s", baseURL, convID), nil)
+		if err != nil {
+			t.Fatalf("Get conversation failed: %v", err)
+		}
+
+		getConv := getResult["conversation"].(map[string]any)
+		sessionID, ok := getConv["session_id"].(string)
+		if !ok || sessionID != "test-sid-e2e-1234" {
+			t.Fatalf("Expected session_id 'test-sid-e2e-1234', got %q", sessionID)
+		}
+	})
+
+	t.Run("auto_generated_session_id", func(t *testing.T) {
+		// Create conversation without X-Session-ID header
+		result, status, err := httpJSON("POST", baseURL+"/conversations", nil)
+		if err != nil {
+			t.Fatalf("Create conversation failed: %v", err)
+		}
+		if status != 201 {
+			t.Fatalf("Expected status 201, got %d", status)
+		}
+
+		conv := result["conversation"].(map[string]any)
+		convID := conv["id"].(string)
+
+		// Get the conversation and verify session_id is auto-generated
+		getResult, _, err := httpJSON("GET", fmt.Sprintf("%s/conversations/%s", baseURL, convID), nil)
+		if err != nil {
+			t.Fatalf("Get conversation failed: %v", err)
+		}
+
+		getConv := getResult["conversation"].(map[string]any)
+		sessionID, ok := getConv["session_id"].(string)
+		if !ok || sessionID == "" {
+			t.Fatal("Expected non-empty auto-generated session_id")
+		}
+		if len(sessionID) != 8 {
+			t.Fatalf("Expected 8-char session_id, got %d chars: %q", len(sessionID), sessionID)
+		}
+	})
 }

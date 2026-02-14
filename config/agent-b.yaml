@@ -1,6 +1,5 @@
 name: resource-agent-b
 description: Backend resource agent with MCP tools (Agent B in chain).
-
 prompt: |
   You are a resource management agent. You MUST use tools to perform operations.
 
@@ -12,16 +11,10 @@ prompt: |
   - ADD/CREATE: Call resources_add with name and value
   - REMOVE/DELETE: Call resources_remove with id or pattern
   - LIST/SEARCH/SHOW: Call resources_list, optionally with pattern
-
 host: 0.0.0.0
-port: 8082
-data_dir: ./data/agent-b
-
+port: 8080
+data_dir: /app/data/agent-b
 llm:
-  model: gemini-2.5-flash
-
+  model: gemini-3-flash-preview
 mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/agent-b/resources.db
+  url: http://mcp-resources:8080/mcp

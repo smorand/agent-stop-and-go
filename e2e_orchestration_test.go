@@ -9,8 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"testing"
-	"time"
 
 	"agent-stop-and-go/internal/a2a"
 	"agent-stop-and-go/internal/agent"
@@ -25,6 +25,46 @@ type orchServer struct {
 	agent   *agent.Agent
 	server  *api.Server
 	cfg     *config.Config
+}
+
+// startMCPResources starts an mcp-resources HTTP server as a subprocess.
+func startMCPResources(t *testing.T, port int, dbPath string) {
+	t.Helper()
+
+	os.MkdirAll("./data", 0755)
+
+	tmpCfg := fmt.Sprintf("host: 0.0.0.0\nport: %d\ndb_path: %s\n", port, dbPath)
+	tmpFile, err := os.CreateTemp("", "mcp-resources-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp config: %v", err)
+	}
+	tmpFile.WriteString(tmpCfg)
+	tmpFile.Close()
+
+	cmd := exec.Command(mcpResourcesBin(), "--config", tmpFile.Name())
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		os.Remove(tmpFile.Name())
+		t.Fatalf("Failed to start mcp-resources on port %d: %v", port, err)
+	}
+
+	// Wait for mcp-resources to be ready
+	mcpURL := fmt.Sprintf("http://localhost:%d/mcp", port)
+	ready := waitForHTTP(mcpURL, 30)
+	if !ready {
+		cmd.Process.Kill()
+		os.Remove(tmpFile.Name())
+		t.Fatalf("mcp-resources failed to start on port %d within timeout", port)
+	}
+
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+		os.Remove(tmpFile.Name())
+		os.Remove(dbPath)
+	})
 }
 
 // startOrchServer starts a test server with the given config and port.
@@ -55,18 +95,7 @@ func startOrchServer(t *testing.T, configPath string, port int) *orchServer {
 	base := fmt.Sprintf("http://localhost:%d", port)
 
 	// Wait for server ready
-	ready := false
-	for i := 0; i < 30; i++ {
-		resp, err := http.Get(base + "/health")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == 200 {
-				ready = true
-				break
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
+	ready := waitForHTTP(base+"/health", 30)
 	if !ready {
 		ag.Stop()
 		t.Fatalf("Server on port %d failed to start", port)
@@ -114,6 +143,7 @@ func orchA2aRPC(baseURL, method string, params any) (*a2a.Response, error) {
 
 // TS-022: Sequential pipeline with non-destructive tool
 func TestOrchSequentialNonDestructive(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_seq/resources.db")
 	srv := startOrchServer(t, "testdata/e2e-sequential.yaml", 9091)
 
 	// Create conversation
@@ -158,6 +188,7 @@ func TestOrchSequentialNonDestructive(t *testing.T) {
 
 // TS-023: Sequential pipeline with destructive tool and approval
 func TestOrchSequentialDestructive(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_seq/resources.db")
 	srv := startOrchServer(t, "testdata/e2e-sequential.yaml", 9091)
 
 	// Create conversation
@@ -229,6 +260,7 @@ func TestOrchSequentialDestructive(t *testing.T) {
 
 // TS-024: Parallel execution (destructive tools run immediately without approval)
 func TestOrchParallel(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_par/resources.db")
 	srv := startOrchServer(t, "testdata/e2e-parallel.yaml", 9091)
 
 	// Create conversation
@@ -275,6 +307,7 @@ func TestOrchParallel(t *testing.T) {
 
 // TS-025: Loop execution with exit condition (destructive tools run immediately)
 func TestOrchLoopWithExit(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_loop/resources.db")
 	srv := startOrchServer(t, "testdata/e2e-loop.yaml", 9091)
 
 	// Create conversation
@@ -321,6 +354,8 @@ func TestOrchLoopWithExit(t *testing.T) {
 
 // TS-026: A2A chain non-destructive (Agent A → A2A → Agent B → resources_list)
 func TestOrchA2AChainNonDestructive(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_chain/resources.db")
+
 	// Start Agent B first (backend with MCP tools)
 	_ = startOrchServer(t, "testdata/e2e-chain-b.yaml", 9092)
 
@@ -369,6 +404,8 @@ func TestOrchA2AChainNonDestructive(t *testing.T) {
 
 // TS-027: A2A chain destructive with proxy approval (Agent A → A2A → Agent B → resources_add)
 func TestOrchA2AChainDestructive(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_chain/resources.db")
+
 	// Start Agent B (backend with destructive MCP tools)
 	_ = startOrchServer(t, "testdata/e2e-chain-b.yaml", 9092)
 
@@ -439,6 +476,7 @@ func TestOrchA2AChainDestructive(t *testing.T) {
 
 // TS-028: Sequential pipeline accessed via A2A protocol (non-destructive)
 func TestOrchSequentialViaA2A(t *testing.T) {
+	startMCPResources(t, 9290, "./data/e2e_test_seq/resources.db")
 	srv := startOrchServer(t, "testdata/e2e-sequential.yaml", 9091)
 
 	// Send message via A2A protocol to an orchestrated agent

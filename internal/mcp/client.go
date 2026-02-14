@@ -9,8 +9,48 @@ import (
 	"sync"
 )
 
-// Client manages communication with an MCP server.
-type Client struct {
+// Client is the interface for MCP communication.
+type Client interface {
+	Start() error
+	Stop() error
+	Tools() []Tool
+	GetTool(name string) *Tool
+	CallTool(name string, args map[string]any) (*CallToolResult, error)
+}
+
+// ClientConfig holds configuration for creating an MCP client.
+type ClientConfig struct {
+	URL     string   // Streamable HTTP endpoint
+	Command string   // stdio subprocess command
+	Args    []string // stdio subprocess args
+}
+
+// NewClient creates a Client based on config.
+// If URL is set, uses HTTP transport. If Command is set, uses stdio.
+// If neither is set, returns a no-op client (for agents that only use A2A).
+func NewClient(cfg ClientConfig) (Client, error) {
+	if cfg.URL != "" {
+		return NewHTTPClient(cfg.URL), nil
+	}
+	if cfg.Command != "" {
+		return NewStdioClient(cfg.Command, cfg.Args), nil
+	}
+	return &NopClient{}, nil
+}
+
+// NopClient is a no-op MCP client for agents that don't use MCP tools.
+type NopClient struct{}
+
+func (c *NopClient) Start() error                                       { return nil }
+func (c *NopClient) Stop() error                                        { return nil }
+func (c *NopClient) Tools() []Tool                                      { return nil }
+func (c *NopClient) GetTool(string) *Tool                               { return nil }
+func (c *NopClient) CallTool(string, map[string]any) (*CallToolResult, error) {
+	return nil, fmt.Errorf("no MCP server configured")
+}
+
+// StdioClient manages communication with an MCP server over stdio.
+type StdioClient struct {
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  *bufio.Reader
@@ -20,16 +60,16 @@ type Client struct {
 	started bool
 }
 
-// NewClient creates a new MCP client.
-func NewClient(command string, args []string) *Client {
-	return &Client{
+// NewStdioClient creates a new stdio MCP client.
+func NewStdioClient(command string, args []string) *StdioClient {
+	return &StdioClient{
 		cmd:    exec.Command(command, args...),
 		nextID: 1,
 	}
 }
 
 // Start launches the MCP server and initializes the connection.
-func (c *Client) Start() error {
+func (c *StdioClient) Start() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -71,7 +111,7 @@ func (c *Client) Start() error {
 }
 
 // Stop terminates the MCP server.
-func (c *Client) Stop() error {
+func (c *StdioClient) Stop() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -94,14 +134,14 @@ func (c *Client) Stop() error {
 }
 
 // Tools returns the available tools from the MCP server.
-func (c *Client) Tools() []Tool {
+func (c *StdioClient) Tools() []Tool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.tools
 }
 
 // GetTool returns a specific tool by name.
-func (c *Client) GetTool(name string) *Tool {
+func (c *StdioClient) GetTool(name string) *Tool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, t := range c.tools {
@@ -113,7 +153,7 @@ func (c *Client) GetTool(name string) *Tool {
 }
 
 // CallTool executes a tool with the given arguments.
-func (c *Client) CallTool(name string, args map[string]any) (*CallToolResult, error) {
+func (c *StdioClient) CallTool(name string, args map[string]any) (*CallToolResult, error) {
 	params := CallToolParams{
 		Name:      name,
 		Arguments: args,
@@ -128,7 +168,7 @@ func (c *Client) CallTool(name string, args map[string]any) (*CallToolResult, er
 }
 
 // initialize sends the initialize request to the MCP server.
-func (c *Client) initialize() error {
+func (c *StdioClient) initialize() error {
 	params := InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		ClientInfo: ClientInfo{
@@ -148,7 +188,7 @@ func (c *Client) initialize() error {
 }
 
 // loadTools fetches the available tools from the MCP server.
-func (c *Client) loadTools() error {
+func (c *StdioClient) loadTools() error {
 	var result ListToolsResult
 	if err := c.call("tools/list", nil, &result); err != nil {
 		return err
@@ -158,7 +198,7 @@ func (c *Client) loadTools() error {
 }
 
 // call sends a JSON-RPC request and waits for the response.
-func (c *Client) call(method string, params any, result any) error {
+func (c *StdioClient) call(method string, params any, result any) error {
 	id := c.nextID
 	c.nextID++
 
@@ -192,7 +232,7 @@ func (c *Client) call(method string, params any, result any) error {
 }
 
 // notify sends a JSON-RPC notification (no response expected).
-func (c *Client) notify(method string, params any) error {
+func (c *StdioClient) notify(method string, params any) error {
 	req := Request{
 		JSONRPC: "2.0",
 		ID:      0,
@@ -203,7 +243,7 @@ func (c *Client) notify(method string, params any) error {
 }
 
 // send writes a JSON-RPC message to the MCP server.
-func (c *Client) send(msg any) error {
+func (c *StdioClient) send(msg any) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal message: %w", err)
@@ -218,7 +258,7 @@ func (c *Client) send(msg any) error {
 }
 
 // receive reads a JSON-RPC response from the MCP server.
-func (c *Client) receive() (*Response, error) {
+func (c *StdioClient) receive() (*Response, error) {
 	line, err := c.stdout.ReadBytes('\n')
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from MCP server: %w", err)

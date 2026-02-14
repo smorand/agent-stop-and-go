@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	baseURL          = "https://generativelanguage.googleapis.com/v1beta/models"
+	baseURL           = "https://generativelanguage.googleapis.com/v1beta/models"
 	httpClientTimeout = 60 * time.Second
 )
 

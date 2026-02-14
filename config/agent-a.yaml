@@ -11,20 +11,13 @@ prompt: |
 
 host: 0.0.0.0
 port: 8080
-data_dir: ./data/agent-a
+data_dir: /app/data/agent-a
 
 llm:
-  model: gemini-2.5-flash
-
-# Dummy MCP (required by framework, but Agent A doesn't use tools directly)
-mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/agent-a/resources.db
+  model: gemini-3-flash-preview
 
 a2a:
   - name: resource-agent
-    url: http://agent-b:8082/a2a
+    url: http://agent-b:8080/a2a
     description: "Backend resource management agent. Delegate all resource operations to this agent."
     destructiveHint: false

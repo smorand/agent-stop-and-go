@@ -23,7 +23,4 @@ llm:
   model: gemini-2.5-flash
 
 mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/resources.db
+  url: http://localhost:8090/mcp

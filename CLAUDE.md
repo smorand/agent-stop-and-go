@@ -6,13 +6,13 @@ Generic API for async autonomous agents with MCP tool support, A2A sub-agent del
 
 ## Tech Stack
 
-- **Language**: Go 1.23
+- **Language**: Go 1.24
 - **Web Framework**: Fiber
 - **LLM**: Gemini / Claude (multi-provider: `claude-*` → Anthropic, others → Gemini)
-- **MCP Protocol**: JSON-RPC 2.0 over stdio
+- **MCP Protocol**: Streamable HTTP (primary) or stdio (legacy) via `github.com/mark3labs/mcp-go`
 - **A2A Protocol**: JSON-RPC 2.0 over HTTPS
 - **Config**: YAML (gopkg.in/yaml.v3)
-- **Storage**: JSON files (conversations), SQLite (MCP resources)
+- **Storage**: JSON files (conversations), SQLite via `modernc.org/sqlite` (pure Go, no CGO)
 - **Build**: Make
 - **Container**: Docker
 
@@ -24,15 +24,15 @@ Generic API for async autonomous agents with MCP tool support, A2A sub-agent del
 ## Key Commands
 
 ```bash
-make build        # Build both binaries for current platform
-make run          # Build and run API on port 8080
-make test         # Run tests
-make check        # Run all checks (fmt, vet, lint, test)
-make e2e          # Run E2E tests (requires GEMINI_API_KEY)
-make docker       # Build Docker image
-make docker-run   # Run Docker container (single agent)
-make compose-up   # Start multi-agent Docker Compose stack
-make compose-down # Stop Docker Compose stack
+make build           # Build all binaries for current platform (incremental)
+make run CMD=agent   # Build and run agent on port 8080
+make test            # Run unit tests
+make check           # Run all checks (fmt, vet, lint, test)
+make e2e             # Run E2E tests (requires GEMINI_API_KEY)
+make docker-build    # Build Docker images for all commands
+make docker-run      # Run single agent Docker container
+make run-up          # Build Docker images and start docker compose
+make run-down        # Stop docker compose services
 ```
 
 ## Project Structure
@@ -41,18 +41,23 @@ make compose-down # Stop Docker Compose stack
 config/
 ├── agent.yaml                    # Default single-agent config
 ├── web.yaml                      # Web frontend config (local dev)
+├── mcp-resources.yaml            # MCP resources server config (local dev)
+├── mcp-resources-compose.yaml    # MCP resources server config (Docker Compose)
 ├── agent-a.yaml                  # Docker Compose: orchestrator
 ├── agent-b.yaml                  # Docker Compose: resource agent
 └── web-compose.yaml              # Docker Compose: web frontend
 cmd/
 ├── agent/main.go                 # API entry point
 ├── web/main.go                   # Web chat (A2A-only frontend)
-└── mcp-resources/main.go         # MCP server (SQLite resources)
+└── mcp-resources/main.go         # MCP Streamable HTTP server (SQLite resources)
 internal/
 ├── api/                          # HTTP handlers (Fiber)
 ├── agent/                        # Agent logic with LLM + MCP + A2A + orchestration
 ├── llm/                          # Multi-provider LLM clients (60s timeout)
-├── mcp/                          # MCP client (JSON-RPC over stdio)
+├── mcp/                          # MCP client (dual transport: HTTP + stdio)
+│   ├── client.go                 # Client interface, StdioClient, factory
+│   ├── client_http.go            # HTTPClient (Streamable HTTP via mcp-go)
+│   └── protocol.go               # Domain types + stdio transport types
 ├── a2a/                          # A2A client (JSON-RPC over HTTPS)
 ├── auth/                         # Bearer token context propagation
 ├── config/                       # YAML config loader
@@ -78,7 +83,7 @@ testdata/                             # E2E orchestration test configs
 
 ## Key Concepts
 
-- **MCP Server**: External binary providing tools via JSON-RPC over stdio
+- **MCP Server**: Standalone HTTP service (`mcp-resources`) providing tools via MCP Streamable HTTP transport (legacy stdio also supported)
 - **A2A Agents**: Remote agents accessible via JSON-RPC over HTTPS
 - **destructiveHint**: Tool/agent property indicating approval requirement
 - **Conversation Status**: `active`, `waiting_approval`, `completed`
@@ -108,10 +113,10 @@ llm:
   model: gemini-2.5-flash    # or claude-sonnet-4-5-20250929 for Claude
 
 mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/resources.db
+  url: http://localhost:8090/mcp    # Streamable HTTP (preferred)
+  # OR legacy stdio transport:
+  # command: ./bin/mcp-resources
+  # args: [--db, ./data/resources.db]
 
 a2a:
   - name: summarizer
@@ -126,8 +131,7 @@ When `agent` key is present, the tree-based orchestrator is used:
 
 ```yaml
 mcp:
-  command: ./bin/mcp-resources
-  args: [--db, ./data/resources.db]
+  url: http://localhost:8090/mcp
 
 agent:
   name: pipeline
@@ -211,16 +215,28 @@ Routes: `GET /` (chat UI), `POST /api/send`, `POST /api/approve`, `GET /api/conv
 
 ## E2E Tests
 
-Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require `GEMINI_API_KEY` and built MCP binary.
+Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require `GEMINI_API_KEY` and built binaries.
 
-- **Core tests** (`e2e_test.go`): Single-agent scenarios on port 9090 (TS-001 to TS-014, TS-020)
-- **Orchestration tests** (`e2e_orchestration_test.go`): Multi-agent orchestration on ports 9091-9092 (TS-022 to TS-028)
+- **Core tests** (`e2e_test.go`): Single-agent scenarios on port 9090 (TS-001 to TS-014, TS-020). Starts `mcp-resources` on port 8090 in `TestMain`.
+- **Orchestration tests** (`e2e_orchestration_test.go`): Multi-agent orchestration on ports 9091-9092 (TS-022 to TS-028). Each test starts `mcp-resources` on port 9290.
   - Sequential, Parallel, Loop pipelines with MCP tools
   - A2A chain delegation with proxy approval
   - Orchestrated pipelines accessed via A2A protocol
-- **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests)
+- **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests, use `mcp.url`)
+
+## Development Notes
+
+- **No CI/CD pipeline**: This project does not have a CI/CD pipeline. Tests are run locally via `make test` and `make e2e`.
+- **Minimal unit tests**: Unit test coverage is intentionally limited to core packages (auth, config, conversation, storage). The primary testing strategy relies on E2E tests that validate the full request flow.
 
 ## Documentation Index
 
 - `.agent_docs/golang.md` - Go coding standards and project conventions
 - `.agent_docs/makefile.md` - Makefile targets and build documentation
+- `docs/README.md` - Documentation index and reading order
+- `docs/overview.md` - Project overview, features, tech stack, quick start
+- `docs/architecture.md` - System architecture, component diagrams, data models, design decisions
+- `docs/functionalities.md` - Comprehensive feature documentation, API reference, configuration
+- `docs/authentication.md` - Bearer token forwarding, session ID tracing, security
+- `docs/devops.md` - Build system, testing strategy, code quality, Docker build, logging
+- `docs/deployment.md` - Local dev, Docker, Docker Compose deployment
