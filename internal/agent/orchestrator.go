@@ -361,11 +361,9 @@ func (a *Agent) executeLLMNode(ctx context.Context, node *config.AgentNode, stat
 		return a.pauseForApproval(conv, state, node, path, userMessage, tool.Name, toolArgs, description)
 	}
 
-	// Execute non-destructive MCP tool (serialize access for parallel safety)
+	// Execute non-destructive MCP tool (CompositeClient handles serialization)
 	conv.AddToolCall(toolName, toolArgs)
-	a.mcpMu.Lock()
 	result, err := a.mcpClient.CallTool(toolName, toolArgs)
-	a.mcpMu.Unlock()
 	if err != nil {
 		errorMsg := fmt.Sprintf("[%s] Tool execution failed: %v", node.Name, err)
 		conv.AddToolResult(toolName, errorMsg, true)

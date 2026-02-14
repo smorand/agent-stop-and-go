@@ -63,7 +63,10 @@ func main() {
 			url = strings.TrimRight(cfg.AgentURL, "/") + "/conversations/" + req.ConversationID + "/messages"
 		}
 
-		body, _ := json.Marshal(map[string]string{"message": req.Message})
+		body, err := json.Marshal(map[string]string{"message": req.Message})
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to marshal request: %v", err)})
+		}
 		httpReq, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -76,7 +79,10 @@ func main() {
 		}
 		defer resp.Body.Close()
 
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("failed to read response: %v", err)})
+		}
 		c.Set("Content-Type", "application/json")
 		return c.Status(resp.StatusCode).Send(respBody)
 	})
@@ -95,7 +101,10 @@ func main() {
 		}
 
 		url := strings.TrimRight(cfg.AgentURL, "/") + "/approvals/" + req.UUID
-		body, _ := json.Marshal(map[string]bool{"approved": req.Approved})
+		body, err := json.Marshal(map[string]bool{"approved": req.Approved})
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to marshal request: %v", err)})
+		}
 		httpReq, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(body))
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
@@ -108,7 +117,10 @@ func main() {
 		}
 		defer resp.Body.Close()
 
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("failed to read response: %v", err)})
+		}
 		c.Set("Content-Type", "application/json")
 		return c.Status(resp.StatusCode).Send(respBody)
 	})
@@ -129,7 +141,10 @@ func main() {
 		}
 		defer resp.Body.Close()
 
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("failed to read response: %v", err)})
+		}
 		c.Set("Content-Type", "application/json")
 		return c.Status(resp.StatusCode).Send(respBody)
 	})
@@ -141,7 +156,9 @@ func main() {
 	go func() {
 		<-quit
 		log.Println("Shutting down web server...")
-		app.Shutdown()
+		if err := app.Shutdown(); err != nil {
+			log.Printf("Error during shutdown: %v", err)
+		}
 	}()
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)

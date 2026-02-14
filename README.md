@@ -167,12 +167,14 @@ description: "A resource management agent"
 prompt: |
   Your agent's system prompt here...
 
-# Required: MCP server providing tools
-mcp:
-  command: ./bin/mcp-resources
-  args:
-    - --db
-    - ./data/resources.db
+# Required: MCP servers providing tools (one or more)
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp    # Streamable HTTP (preferred)
+  # OR legacy stdio transport:
+  # - name: resources
+  #   command: ./bin/mcp-resources
+  #   args: [--db, ./data/resources.db]
 
 # Optional (shown with defaults)
 host: 0.0.0.0        # Listen address
@@ -269,7 +271,12 @@ To create a different agent:
 
 ## MCP Server Protocol
 
-MCP servers communicate via JSON-RPC 2.0 over stdin/stdout:
+MCP servers communicate via JSON-RPC 2.0. Two transports are supported:
+
+- **Streamable HTTP** (preferred): The MCP server runs as a standalone HTTP service
+- **stdio** (legacy): The MCP server runs as a subprocess, communicating via stdin/stdout
+
+Multiple MCP servers can be configured simultaneously. A `CompositeClient` aggregates tools from all servers and routes calls to the correct sub-client.
 
 ```json
 // Request

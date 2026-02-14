@@ -61,9 +61,7 @@ func TestMain(m *testing.M) {
 	// Override for tests
 	cfg.Port = 9090
 	cfg.DataDir = "./data/e2e_test"
-	cfg.MCP.URL = "http://localhost:8090/mcp"
-	cfg.MCP.Command = ""
-	cfg.MCP.Args = nil
+	cfg.MCPServers = []config.MCPServerConfig{{Name: "resources", URL: "http://localhost:8090/mcp"}}
 
 	store, err := storage.New(cfg.DataDir)
 	if err != nil {
@@ -1157,4 +1155,301 @@ func TestSessionIDPropagation(t *testing.T) {
 			t.Fatalf("Expected 8-char session_id, got %d chars: %q", len(sessionID), sessionID)
 		}
 	})
+}
+
+// --- Additional coverage tests ---
+
+// TestListConversations verifies GET /conversations returns a list with summary counts.
+func TestListConversations(t *testing.T) {
+	// Create two conversations to ensure the list is non-empty
+	_, _, err := httpJSON("POST", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("Create conversation 1 failed: %v", err)
+	}
+	_, _, err = httpJSON("POST", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("Create conversation 2 failed: %v", err)
+	}
+
+	// List conversations
+	result, status, err := httpJSON("GET", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("List conversations failed: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("Expected status 200, got %d", status)
+	}
+
+	// Verify conversations array exists
+	conversations, ok := result["conversations"].([]any)
+	if !ok {
+		t.Fatalf("Expected conversations array, got %T", result["conversations"])
+	}
+	if len(conversations) < 2 {
+		t.Fatalf("Expected at least 2 conversations, got %d", len(conversations))
+	}
+
+	// Verify summary object
+	summary, ok := result["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected summary object, got %T", result["summary"])
+	}
+
+	total, ok := summary["total"].(float64)
+	if !ok || total < 2 {
+		t.Fatalf("Expected total >= 2, got %v", summary["total"])
+	}
+
+	// Verify summary contains all status keys
+	if _, ok := summary["active"]; !ok {
+		t.Fatal("Expected summary to contain 'active' key")
+	}
+	if _, ok := summary["waiting_approval"]; !ok {
+		t.Fatal("Expected summary to contain 'waiting_approval' key")
+	}
+	if _, ok := summary["completed"]; !ok {
+		t.Fatal("Expected summary to contain 'completed' key")
+	}
+
+	// Verify each conversation in the list has expected fields
+	for i, c := range conversations {
+		conv, ok := c.(map[string]any)
+		if !ok {
+			t.Fatalf("conversations[%d]: expected object, got %T", i, c)
+		}
+		if conv["id"] == nil || conv["id"] == "" {
+			t.Fatalf("conversations[%d]: expected non-empty id", i)
+		}
+		if conv["status"] == nil || conv["status"] == "" {
+			t.Fatalf("conversations[%d]: expected non-empty status", i)
+		}
+	}
+}
+
+// TestDocsEndpoints verifies GET /docs and GET /docs/json return valid responses.
+func TestDocsEndpoints(t *testing.T) {
+	t.Run("docs_html", func(t *testing.T) {
+		resp, err := http.Get(baseURL + "/docs")
+		if err != nil {
+			t.Fatalf("Docs HTML request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			t.Fatalf("Expected status 200, got %d", resp.StatusCode)
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if !strings.Contains(contentType, "text/html") {
+			t.Fatalf("Expected Content-Type text/html, got %q", contentType)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Failed to read body: %v", err)
+		}
+
+		bodyStr := string(body)
+		if !strings.Contains(bodyStr, "Agent Stop and Go") {
+			t.Fatal("Expected docs HTML to contain the API title")
+		}
+		if !strings.Contains(bodyStr, "/health") {
+			t.Fatal("Expected docs HTML to reference /health endpoint")
+		}
+		if !strings.Contains(bodyStr, "/conversations") {
+			t.Fatal("Expected docs HTML to reference /conversations endpoint")
+		}
+	})
+
+	t.Run("docs_json", func(t *testing.T) {
+		result, status, err := httpJSON("GET", baseURL+"/docs/json", nil)
+		if err != nil {
+			t.Fatalf("Docs JSON request failed: %v", err)
+		}
+		if status != 200 {
+			t.Fatalf("Expected status 200, got %d", status)
+		}
+
+		if result["title"] != "Agent Stop and Go API" {
+			t.Fatalf("Expected title 'Agent Stop and Go API', got %v", result["title"])
+		}
+		if result["version"] != "1.0.0" {
+			t.Fatalf("Expected version '1.0.0', got %v", result["version"])
+		}
+
+		endpoints, ok := result["endpoints"].([]any)
+		if !ok {
+			t.Fatalf("Expected endpoints array, got %T", result["endpoints"])
+		}
+		if len(endpoints) == 0 {
+			t.Fatal("Expected at least one endpoint in docs")
+		}
+	})
+}
+
+// TestToolsShowServerField verifies that tools returned by GET /tools include the server field
+// from the multi-MCP-server CompositeClient.
+func TestToolsShowServerField(t *testing.T) {
+	result, status, err := httpJSON("GET", baseURL+"/tools", nil)
+	if err != nil {
+		t.Fatalf("Tools request failed: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("Expected status 200, got %d", status)
+	}
+
+	tools, ok := result["tools"].([]any)
+	if !ok {
+		t.Fatalf("Expected tools array, got %T", result["tools"])
+	}
+	if len(tools) == 0 {
+		t.Fatal("Expected at least one tool")
+	}
+
+	// Check that MCP tools (not A2A synthetic tools) have the server field set
+	for _, tool := range tools {
+		toolMap, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		toolName, _ := toolMap["name"].(string)
+		// Skip synthetic A2A tools (they don't come from MCP servers)
+		if strings.HasPrefix(toolName, "a2a_") {
+			continue
+		}
+
+		server, ok := toolMap["server"].(string)
+		if !ok || server == "" {
+			t.Fatalf("Expected MCP tool %q to have non-empty 'server' field, got %v", toolName, toolMap["server"])
+		}
+		// The test setup uses a single MCP server named "resources"
+		if server != "resources" {
+			t.Fatalf("Expected MCP tool %q to have server='resources', got %q", toolName, server)
+		}
+	}
+}
+
+// TestMessageToWaitingConversation verifies that sending a message to a conversation
+// in waiting_approval status returns the pending approval info without processing.
+func TestMessageToWaitingConversation(t *testing.T) {
+	// Create conversation
+	createResult, _, err := httpJSON("POST", baseURL+"/conversations", nil)
+	if err != nil {
+		t.Fatalf("Create conversation failed: %v", err)
+	}
+	conv := createResult["conversation"].(map[string]any)
+	convID := conv["id"].(string)
+
+	// Send destructive message to trigger approval
+	result, _, err := httpJSON("POST", fmt.Sprintf("%s/conversations/%s/messages", baseURL, convID), map[string]string{
+		"message": "add resource waiting-test with value 55",
+	})
+	if err != nil {
+		t.Fatalf("Send message failed: %v", err)
+	}
+
+	processResult := result["result"].(map[string]any)
+	waitingApproval, ok := processResult["waiting_approval"].(bool)
+	if !ok || !waitingApproval {
+		t.Fatal("Expected waiting_approval to be true")
+	}
+
+	// Now send another message while the conversation is waiting for approval
+	result2, status, err := httpJSON("POST", fmt.Sprintf("%s/conversations/%s/messages", baseURL, convID), map[string]string{
+		"message": "list resources",
+	})
+	if err != nil {
+		t.Fatalf("Send message to waiting conversation failed: %v", err)
+	}
+	if status != 200 {
+		t.Fatalf("Expected status 200, got %d", status)
+	}
+
+	// Should indicate the conversation is still waiting for approval
+	processResult2 := result2["result"].(map[string]any)
+	waitingApproval2, ok := processResult2["waiting_approval"].(bool)
+	if !ok || !waitingApproval2 {
+		t.Fatal("Expected waiting_approval to be true when sending message to waiting conversation")
+	}
+
+	response, ok := processResult2["response"].(string)
+	if !ok || !strings.Contains(response, "waiting for approval") {
+		t.Fatalf("Expected response to mention waiting for approval, got %q", response)
+	}
+
+	// The approval object should still be present
+	if processResult2["approval"] == nil {
+		t.Fatal("Expected approval object to be present")
+	}
+}
+
+// TestAgentCardSkillsMatchTools verifies that the agent card skills correspond to the tools
+// returned by GET /tools.
+func TestAgentCardSkillsMatchTools(t *testing.T) {
+	// Get tools
+	toolsResult, _, err := httpJSON("GET", baseURL+"/tools", nil)
+	if err != nil {
+		t.Fatalf("Tools request failed: %v", err)
+	}
+	tools := toolsResult["tools"].([]any)
+
+	// Get agent card
+	resp, err := http.Get(baseURL + "/.well-known/agent.json")
+	if err != nil {
+		t.Fatalf("Agent card request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var card map[string]any
+	if err := json.Unmarshal(body, &card); err != nil {
+		t.Fatalf("Failed to parse agent card: %v", err)
+	}
+
+	skills := card["skills"].([]any)
+
+	// Number of skills should match number of tools
+	if len(skills) != len(tools) {
+		t.Fatalf("Expected %d skills (matching tools), got %d", len(tools), len(skills))
+	}
+
+	// Build tool name set
+	toolNames := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		toolMap := tool.(map[string]any)
+		toolNames[toolMap["name"].(string)] = true
+	}
+
+	// Every skill ID should correspond to a tool name
+	for _, skill := range skills {
+		skillMap := skill.(map[string]any)
+		skillID := skillMap["id"].(string)
+		if !toolNames[skillID] {
+			t.Fatalf("Skill ID %q does not match any tool name", skillID)
+		}
+	}
+}
+
+// TestErrorA2AInvalidParams verifies JSON-RPC error for message/send with missing text parts.
+func TestErrorA2AInvalidParams(t *testing.T) {
+	// Send message/send with empty parts
+	rpcResp, err := a2aRPC("message/send", a2a.MessageSendParams{
+		Message: a2a.Message{
+			Role:  "user",
+			Parts: []a2a.Part{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if rpcResp.Error == nil {
+		t.Fatal("Expected JSON-RPC error for empty parts")
+	}
+	if rpcResp.Error.Code != -32602 {
+		t.Fatalf("Expected error code -32602, got %d", rpcResp.Error.Code)
+	}
+	if rpcResp.Error.Message != "No text part in message" {
+		t.Fatalf("Expected 'No text part in message', got %q", rpcResp.Error.Message)
+	}
 }

@@ -8,8 +8,9 @@ data_dir: ./data/e2e_test_chain_b
 llm:
   model: gemini-3-flash-preview
 
-mcp:
-  url: http://localhost:9290/mcp
+mcp_servers:
+  - name: resources
+    url: http://localhost:9290/mcp
 
 prompt: |
   You are a resource management agent. You MUST use tools to perform operations.

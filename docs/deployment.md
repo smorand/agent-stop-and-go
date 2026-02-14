@@ -6,7 +6,7 @@ This document covers three deployment methods: local development, single-agent D
 
 | Tool | Version | Required For |
 |------|---------|-------------|
-| Go | 1.23+ | Local development, building binaries |
+| Go | 1.24+ | Local development, building binaries |
 | Make | any | Build automation |
 | Docker | 20.10+ | Docker deployment |
 | Docker Compose | v2+ | Multi-agent deployment |
@@ -96,10 +96,10 @@ make docker
 docker build -t agent-stop-and-go .
 ```
 
-The Dockerfile uses a multi-stage build:
+The Dockerfile uses a multi-stage build with conditional stages:
 
-1. **Build stage** (`golang:1.23-bookworm`): Compiles all Go binaries with CGO enabled (required for SQLite)
-2. **Runtime stage** (`debian:bookworm-slim`): Minimal image with `ca-certificates` and a non-root user
+1. **Build stage** (`golang:1.24-alpine`): Compiles the requested binary with `CGO_ENABLED=0` (SQLite uses `modernc.org/sqlite`, a pure Go driver)
+2. **Runtime stage** (`alpine:3.21`): Minimal image with `ca-certificates` and a non-root user
 
 ### Run the Container
 
@@ -141,39 +141,41 @@ docker run --rm -p 8080:8080 \
 
 | Property | Value |
 |----------|-------|
-| Base image | `debian:bookworm-slim` |
-| User | `appuser` (non-root) |
+| Base image | `alpine:3.21` |
+| User | `appuser` (non-root, UID 10001) |
 | Working directory | `/app` |
 | Exposed port | 8080 |
-| Default command | `/app/bin/agent --config /app/config/agent.yaml` |
-| Binary locations | `/app/bin/agent`, `/app/bin/mcp-resources`, `/app/bin/web` |
+| Default command | `/app/bin/app --config /app/config/agent.yaml` |
+| Binary location | `/app/bin/app` (single binary per image, selected via `GO_BIN` build arg) |
 | Config location | `/app/config/` |
 | Data directory | `/app/data/` |
 
 ## Docker Compose: Multi-Agent Stack
 
-The Docker Compose deployment runs a complete multi-agent architecture:
+The Docker Compose deployment runs a complete multi-agent architecture with four services:
 
 ```mermaid
 graph LR
     subgraph "Docker Compose Stack"
-        Web["web<br/>Port 3000<br/>(Browser UI)"]
-        AgentA["agent-a<br/>Port 8080<br/>(Orchestrator)"]
+        Web["web<br/>Port 8080<br/>(Browser UI)"]
+        AgentA["agent-a<br/>Port 8081<br/>(Orchestrator)"]
         AgentB["agent-b<br/>Port 8082<br/>(Resource Agent)"]
+        MCP["mcp-resources<br/>Port 8090<br/>(MCP Server)"]
     end
 
-    Browser["Browser"] -->|"HTTP :3000"| Web
+    Browser["Browser"] -->|"HTTP :8080"| Web
     Web -->|"REST API"| AgentA
     AgentA -->|"A2A JSON-RPC"| AgentB
-    AgentB -->|"MCP stdio"| MCP["mcp-resources<br/>(subprocess)"]
+    AgentB -->|"MCP Streamable HTTP"| MCP
 ```
 
 ### Configuration Files
 
 | File | Service | Description |
 |------|---------|-------------|
-| `config/agent-a.yaml` | agent-a | Orchestrator: delegates all resource operations to agent-b |
-| `config/agent-b.yaml` | agent-b | Resource agent: runs MCP tools on port 8082 |
+| `config/mcp-resources-compose.yaml` | mcp-resources | MCP Streamable HTTP server (SQLite resources) |
+| `config/agent-a.yaml` | agent-a | Orchestrator: delegates all resource operations to agent-b via A2A |
+| `config/agent-b.yaml` | agent-b | Resource agent: connects to mcp-resources via MCP Streamable HTTP |
 | `config/web-compose.yaml` | web | Web frontend: connects to agent-a at `http://agent-a:8080` |
 
 ### Start the Stack
@@ -194,19 +196,20 @@ docker-compose up --build
 
 | Service | URL | Description |
 |---------|-----|-------------|
-| Web Chat | http://localhost:3000 | Browser-based chat interface |
-| Agent A API | http://localhost:8080 | Orchestrator REST API |
-| Agent A Docs | http://localhost:8080/docs | Interactive API documentation |
-
-Agent B (port 8082) is internal to the Docker network and not exposed externally.
+| Web Chat | http://localhost:8080 | Browser-based chat interface |
+| Agent A API | http://localhost:8081 | Orchestrator REST API |
+| Agent A Docs | http://localhost:8081/docs | Interactive API documentation |
+| Agent B API | http://localhost:8082 | Resource agent REST API |
+| MCP Resources | http://localhost:8090 | MCP Streamable HTTP server |
 
 ### Startup Order
 
-Services start in dependency order:
+Services start in dependency order (enforced by `depends_on` with health checks):
 
-1. **agent-b** starts first (no dependencies)
-2. **agent-a** starts after agent-b (depends on agent-b)
-3. **web** starts after agent-a (depends on agent-a)
+1. **mcp-resources** starts first (no dependencies)
+2. **agent-b** starts after mcp-resources is healthy
+3. **agent-a** starts after agent-b and mcp-resources are healthy
+4. **web** starts after agent-a is healthy
 
 ### Log Correlation
 
@@ -215,6 +218,7 @@ All services write logs to the `./logs/` directory with a shared session prefix:
 ```bash
 # Logs appear in ./logs/ with a timestamp prefix
 logs/
+├── 20260213_143022_a1b2c3d4_mcp-resources.log
 ├── 20260213_143022_a1b2c3d4_agent-a.log
 ├── 20260213_143022_a1b2c3d4_agent-b.log
 └── 20260213_143022_a1b2c3d4_web.log
@@ -234,8 +238,9 @@ docker-compose down
 
 | Volume | Service | Purpose |
 |--------|---------|---------|
+| `mcp-resources-data` | mcp-resources | Persistent SQLite database storage |
 | `agent-a-data` | agent-a | Persistent conversation storage |
-| `agent-b-data` | agent-b | Persistent conversations + SQLite database |
+| `agent-b-data` | agent-b | Persistent conversation storage |
 | `./logs` | all | Shared log directory (bind mount) |
 
 To clear all data:
@@ -253,10 +258,10 @@ Browser → POST /api/send ("list resources")
   → Web → POST /conversations (agent-a:8080)
     → Agent A → LLM: "list resources"
       → LLM calls a2a_resource-agent
-        → Agent A → POST /a2a (agent-b:8082) message/send
+        → Agent A → POST /a2a (agent-b:8080) message/send
           → Agent B → LLM: "list resources"
             → LLM calls resources_list
-              → MCP → SQLite query
+              → MCP HTTP (mcp-resources:8080) → SQLite query
             ← Tool result
           ← A2A Task {state: "completed", artifact: ...}
         ← Agent A responds
@@ -276,8 +281,8 @@ Browser → POST /api/send ("add resource X")
   ← Browser shows approval prompt
 
 Browser → POST /api/approve {uuid, approved: true}
-  → Agent A → POST /a2a (agent-b:8082) message/send (taskId, "approved")
-    → Agent B resolves approval → executes resources_add
+  → Agent A → POST /a2a (agent-b:8080) message/send (taskId, "approved")
+    → Agent B resolves approval → executes resources_add via MCP HTTP
     ← A2A Task {state: "completed", artifact: ...}
   ← Result flows back to browser
 ```
@@ -295,8 +300,10 @@ In Docker Compose, use health checks to verify service readiness:
 
 ```bash
 # Check all services
-curl http://localhost:8080/health   # agent-a
-curl http://localhost:3000/         # web (returns HTML)
+curl http://localhost:8081/health   # agent-a
+curl http://localhost:8082/health   # agent-b
+curl http://localhost:8090/health   # mcp-resources
+curl http://localhost:8080/         # web (returns HTML)
 ```
 
 ## Production Considerations
@@ -330,7 +337,7 @@ curl http://localhost:3000/         # web (returns HTML)
 
 The current architecture is designed for single-instance deployment per agent:
 
-- Each agent runs one MCP subprocess (not shared across instances)
+- MCP servers run as separate services (Streamable HTTP) or subprocesses (stdio), not shared across agent instances
 - Conversation storage uses local JSON files (not a shared database)
 - For horizontal scaling, each agent instance needs its own data directory
 

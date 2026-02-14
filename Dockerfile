@@ -1,9 +1,10 @@
+ARG GO_VERSION=1.24
 ARG GO_BIN=agent
 ARG HAS_INTERNAL=no
 ARG HAS_DATA=no
 
 # --- Base image with user setup ---
-FROM golang:1.24-alpine AS prebuild
+FROM golang:${GO_VERSION}-alpine AS prebuild
 
 ENV USER=appuser
 ENV UID=10001

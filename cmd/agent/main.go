@@ -51,10 +51,15 @@ func main() {
 	}()
 
 	log.Printf("Starting Agent Stop and Go API on %s:%d", cfg.Host, cfg.Port)
-	if cfg.MCP.URL != "" {
-		log.Printf("MCP Server: %s", cfg.MCP.URL)
-	} else if cfg.MCP.Command != "" {
-		log.Printf("MCP Server: %s", cfg.MCP.Command)
+	if len(cfg.MCPServers) == 0 {
+		log.Println("No MCP servers configured")
+	}
+	for _, s := range cfg.MCPServers {
+		if s.URL != "" {
+			log.Printf("MCP Server [%s]: %s", s.Name, s.URL)
+		} else if s.Command != "" {
+			log.Printf("MCP Server [%s]: %s", s.Name, s.Command)
+		}
 	}
 	if err := server.Start(); err != nil {
 		log.Fatalf("Server error: %v", err)

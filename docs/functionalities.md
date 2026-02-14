@@ -64,11 +64,39 @@ All LLM HTTP clients use a **60-second timeout**.
 
 ## MCP Tool Execution
 
+### Multi-Server Architecture
+
+The agent supports connecting to **multiple MCP servers** simultaneously via the `mcp_servers` configuration list. Each server entry has a required `name` field and uses either Streamable HTTP (preferred) or stdio transport.
+
+A `CompositeClient` aggregates tools from all configured servers, checks for duplicate tool names at startup, and routes `CallTool` requests to the correct sub-client based on the tool name.
+
+```yaml
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp           # Streamable HTTP
+  - name: custom-tools
+    command: ./bin/my-mcp-server             # stdio subprocess
+    args: [--db, ./data/custom.db]
+```
+
 ### Protocol
 
-MCP (Model Context Protocol) tools communicate via JSON-RPC 2.0 over stdio. The agent launches an MCP server binary as a subprocess and communicates through stdin/stdout pipes.
+MCP tools communicate via JSON-RPC 2.0. Two transports are supported:
+
+- **Streamable HTTP** (preferred): The agent connects to an MCP server running as a standalone HTTP service via the `mcp-go` library
+- **stdio** (legacy): The agent launches an MCP server binary as a subprocess and communicates through stdin/stdout pipes
 
 ### Lifecycle
+
+**Streamable HTTP transport:**
+
+1. **Connect**: The HTTP client connects to the MCP server URL (with retry: up to 20 attempts, 500ms delay)
+2. **Initialize**: The client sends an `initialize` request via the `mcp-go` library
+3. **Tool Discovery**: The client calls `ListTools` to load available tools
+4. **Tool Execution**: During message processing, the client calls `CallTool` as needed (30s timeout per call)
+5. **Stop**: On shutdown, the client closes the connection
+
+**stdio transport:**
 
 1. **Start**: The MCP binary is launched with configured command and args
 2. **Initialize**: The agent sends an `initialize` request and `notifications/initialized`
@@ -86,6 +114,7 @@ Each tool returned from `tools/list` has:
 | `description` | string | What the tool does (shown to the LLM) |
 | `inputSchema` | object | JSON Schema for the tool's parameters |
 | `destructiveHint` | boolean | If `true`, triggers the approval workflow |
+| `server` | string | Name of the MCP server that provides this tool (set by CompositeClient) |
 
 ### Built-in MCP Server: mcp-resources
 
@@ -99,14 +128,27 @@ The included `mcp-resources` binary provides a SQLite-backed resource management
 
 ### Custom MCP Servers
 
-Any binary that speaks MCP JSON-RPC 2.0 over stdio can be used:
+Any server that speaks the MCP protocol can be used. Two transport options are available:
+
+**Streamable HTTP (preferred):**
 
 ```yaml
-mcp:
-  command: /path/to/my-mcp-server
-  args:
-    - --flag1
-    - value1
+mcp_servers:
+  - name: my-tools
+    url: http://my-mcp-server:8090/mcp
+```
+
+The server must support MCP Streamable HTTP transport and implement the standard MCP endpoints (`initialize`, `tools/list`, `tools/call`).
+
+**stdio (legacy):**
+
+```yaml
+mcp_servers:
+  - name: my-tools
+    command: /path/to/my-mcp-server
+    args:
+      - --flag1
+      - value1
 ```
 
 The binary must implement:
@@ -116,9 +158,15 @@ The binary must implement:
 - `tools/list` -- return available tools with schemas and destructiveHint
 - `tools/call` -- execute a tool and return the result
 
+**Validation rules:**
+
+- Each server entry must have a unique, non-empty `name`
+- Duplicate tool names across servers cause startup failure
+- If no servers are configured, the agent runs with no MCP tools (A2A-only mode)
+
 ### Thread Safety
 
-MCP tool calls are serialized via `Agent.mcpMu` (a `sync.Mutex`). This ensures correctness when parallel orchestration nodes call MCP tools concurrently on the same subprocess.
+The `CompositeClient` uses a `sync.Mutex` to serialize tool map lookups and protect against concurrent access to the tool routing table. Once the target sub-client is identified, the actual `CallTool` invocation is released from the lock and executed on the sub-client directly. Each sub-client (HTTP or stdio) has its own internal mutex for thread safety.
 
 ## A2A Protocol
 
@@ -540,12 +588,14 @@ data_dir: ./data                # Default: "./data"
 llm:
   model: gemini-2.5-flash       # Default: "gemini-2.5-flash"
 
-# MCP server (required)
-mcp:
-  command: ./bin/mcp-resources   # Path to MCP binary
-  args:                          # Arguments passed to the binary
-    - --db
-    - ./data/resources.db
+# MCP servers (optional, one or more)
+mcp_servers:
+  - name: resources              # Required: unique server name
+    url: http://localhost:8090/mcp  # Streamable HTTP (preferred)
+  # OR legacy stdio transport:
+  # - name: resources
+  #   command: ./bin/mcp-resources
+  #   args: [--db, ./data/resources.db]
 
 # A2A sub-agents (optional, simple mode)
 a2a:

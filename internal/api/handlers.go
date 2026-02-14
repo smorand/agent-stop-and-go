@@ -76,10 +76,15 @@ func (s *Server) createConversationHandler(c *fiber.Ctx) error {
 			})
 		}
 
-		conv, _ = s.agent.GetConversation(conv.ID)
+		updatedConv, err := s.agent.GetConversation(conv.ID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": err.Error(),
+			})
+		}
 
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-			"conversation": conv,
+			"conversation": updatedConv,
 			"result":       result,
 		})
 	}
@@ -174,10 +179,15 @@ func (s *Server) sendMessageHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	conv, _ = s.agent.GetConversation(id)
+	updatedConv, err := s.agent.GetConversation(id)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
 
 	return c.JSON(fiber.Map{
-		"conversation": conv,
+		"conversation": updatedConv,
 		"result":       result,
 	})
 }
@@ -340,7 +350,14 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 			}
 
 			task := conversationToTask(conv, result.Response)
-			taskBytes, _ := json.Marshal(task)
+			taskBytes, err := json.Marshal(task)
+			if err != nil {
+				return c.JSON(a2a.Response{
+					JSONRPC: "2.0",
+					ID:      req.ID,
+					Error:   &a2a.RPCError{Code: -32603, Message: fmt.Sprintf("failed to marshal task: %v", err)},
+				})
+			}
 
 			return c.JSON(a2a.Response{
 				JSONRPC: "2.0",
@@ -359,9 +376,23 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 			})
 		}
 
-		conv, _ = s.agent.GetConversation(conv.ID)
-		task := conversationToTask(conv, result.Response)
-		taskBytes, _ := json.Marshal(task)
+		updatedConv, err := s.agent.GetConversation(conv.ID)
+		if err != nil {
+			return c.JSON(a2a.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &a2a.RPCError{Code: -32603, Message: err.Error()},
+			})
+		}
+		task := conversationToTask(updatedConv, result.Response)
+		taskBytes, err := json.Marshal(task)
+		if err != nil {
+			return c.JSON(a2a.Response{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Error:   &a2a.RPCError{Code: -32603, Message: fmt.Sprintf("failed to marshal task: %v", err)},
+			})
+		}
 
 		return c.JSON(a2a.Response{
 			JSONRPC: "2.0",
@@ -390,10 +421,24 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 	}
 
 	// Reload conversation to get updated state
-	conv, _ = s.agent.GetConversation(conv.ID)
+	updatedConv, err := s.agent.GetConversation(conv.ID)
+	if err != nil {
+		return c.JSON(a2a.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &a2a.RPCError{Code: -32603, Message: err.Error()},
+		})
+	}
 
-	task := conversationToTask(conv, result.Response)
-	taskBytes, _ := json.Marshal(task)
+	task := conversationToTask(updatedConv, result.Response)
+	taskBytes, err := json.Marshal(task)
+	if err != nil {
+		return c.JSON(a2a.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &a2a.RPCError{Code: -32603, Message: fmt.Sprintf("failed to marshal task: %v", err)},
+		})
+	}
 
 	return c.JSON(a2a.Response{
 		JSONRPC: "2.0",
@@ -442,7 +487,14 @@ func (s *Server) a2aTasksGet(c *fiber.Ctx, req a2a.Request) error {
 	}
 
 	task := conversationToTask(conv, "")
-	taskBytes, _ := json.Marshal(task)
+	taskBytes, err := json.Marshal(task)
+	if err != nil {
+		return c.JSON(a2a.Response{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Error:   &a2a.RPCError{Code: -32603, Message: fmt.Sprintf("failed to marshal task: %v", err)},
+		})
+	}
 
 	return c.JSON(a2a.Response{
 		JSONRPC: "2.0",

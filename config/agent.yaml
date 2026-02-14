@@ -22,5 +22,6 @@ data_dir: ./data
 llm:
   model: gemini-2.5-flash
 
-mcp:
-  url: http://localhost:8090/mcp
+mcp_servers:
+  - name: resources
+    url: http://localhost:8090/mcp
