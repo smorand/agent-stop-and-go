@@ -8,12 +8,14 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"time"
 
 	"agent-stop-and-go/internal/mcp"
 )
 
-const claudeBaseURL = "https://api.anthropic.com/v1/messages"
+const (
+	claudeBaseURL  = "https://api.anthropic.com/v1/messages"
+	claudeMaxTokens = 4096
+)
 
 // ClaudeClient handles communication with the Anthropic Messages API.
 type ClaudeClient struct {
@@ -32,7 +34,7 @@ func NewClaudeClient(model string) (*ClaudeClient, error) {
 	return &ClaudeClient{
 		model:  model,
 		apiKey: apiKey,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: &http.Client{Timeout: httpClientTimeout},
 	}, nil
 }
 
@@ -126,7 +128,7 @@ func (c *ClaudeClient) GenerateWithTools(ctx context.Context, systemPrompt strin
 	// Build request
 	req := claudeRequest{
 		Model:     c.model,
-		MaxTokens: 4096,
+		MaxTokens: claudeMaxTokens,
 		System:    systemPrompt,
 		Messages:  make([]claudeMessage, 0, len(messages)),
 	}

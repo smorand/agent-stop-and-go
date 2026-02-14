@@ -1,10 +1,11 @@
 # Stage 1: Build
-FROM golang:1.23-bookworm AS builder
+ARG GO_VERSION=1.23
+FROM golang:${GO_VERSION}-bookworm AS builder
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download && go mod verify
 
 COPY . .
 
@@ -18,8 +19,8 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+# Create non-root user (UID 10001 per security best practices)
+RUN groupadd -r appuser && useradd -r -g appuser -u 10001 -d /app -s /sbin/nologin appuser
 
 WORKDIR /app
 

@@ -29,7 +29,7 @@ Project-specific Go conventions for Agent Stop and Go.
 
 - `sync.Mutex` on `Agent.llmMu` to protect lazy LLM client creation
 - `sync.Mutex` on `Agent.mcpMu` to serialize MCP tool calls in parallel pipelines
-- `sync.RWMutex` on `Conversation.mu` for message append safety
+- `sync.Mutex` on `Conversation.mu` for message append safety
 - `sync.RWMutex` on `Storage.mu` for file read/write safety
 - `sync.RWMutex` on `SessionState.mu` for state access in parallel nodes
 
