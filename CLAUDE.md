@@ -42,6 +42,7 @@ config/
 ├── agent.yaml                    # Default single-agent config
 ├── web.yaml                      # Web frontend config (local dev)
 ├── mcp-resources.yaml            # MCP resources server config (local dev)
+├── mcp-filesystem.yaml           # MCP filesystem server config (local dev)
 ├── mcp-resources-compose.yaml    # MCP resources server config (Docker Compose)
 ├── agent-a.yaml                  # Docker Compose: orchestrator
 ├── agent-b.yaml                  # Docker Compose: resource agent
@@ -49,7 +50,8 @@ config/
 cmd/
 ├── agent/main.go                 # API entry point
 ├── web/main.go                   # Web chat (A2A-only frontend)
-└── mcp-resources/main.go         # MCP Streamable HTTP server (SQLite resources)
+├── mcp-resources/main.go         # MCP Streamable HTTP server (SQLite resources)
+└── mcp-filesystem/main.go        # MCP Streamable HTTP server (sandboxed filesystem)
 internal/
 ├── api/                          # HTTP handlers (Fiber)
 ├── agent/                        # Agent logic with LLM + MCP + A2A + orchestration
@@ -59,6 +61,11 @@ internal/
 │   ├── client_http.go            # HTTPClient (Streamable HTTP via mcp-go)
 │   ├── client_composite.go       # CompositeClient wrapping multiple sub-clients
 │   └── protocol.go               # Domain types + stdio transport types
+├── filesystem/                   # MCP filesystem server (sandboxed file operations)
+│   ├── config.go                 # Config, roots, allowlists, YAML loader
+│   ├── security.go               # Path validation, symlink-aware chroot enforcement
+│   ├── patch.go                  # Unified diff parser and atomic patcher
+│   └── tools.go                  # 15 tool handlers (list, read, write, grep, glob, etc.)
 ├── a2a/                          # A2A client (JSON-RPC over HTTPS)
 ├── auth/                         # Bearer token context propagation
 ├── config/                       # YAML config loader
@@ -176,6 +183,28 @@ agent:
 | resources_remove | Remove resources | true |
 | resources_list | List/search resources | false |
 
+## MCP Tools (mcp-filesystem)
+
+Sandboxed filesystem server with chroot-like security per root. Configured via `config/mcp-filesystem.yaml`. Each root has an `allowed_tools` allowlist (`"*"` for all).
+
+| Tool | Description | Read-only |
+|------|-------------|-----------|
+| list_roots | List configured roots and their allowed tools | yes |
+| list_folder | List directory contents (name, type, size, mtime) | yes |
+| read_file | Read file fully or partially (byte/line offsets) | yes |
+| write_file | Write file (overwrite/append/create_only modes) | no |
+| remove_file | Delete a single file | no |
+| patch_file | Apply unified diff patch atomically | no |
+| create_folder | Create directory (with parents, idempotent) | no |
+| remove_folder | Remove directory recursively | no |
+| stat_file | File/directory metadata (size, mtime, type) | yes |
+| hash_file | Compute hash (md5, sha1, sha256) | yes |
+| permissions_file | Owner, group, permission bits | yes |
+| copy | Copy file/directory, potentially cross-root | no |
+| move | Move/rename file/directory, potentially cross-root | no |
+| grep | Regex search in file contents with context lines | yes |
+| glob | File name search by glob or regex pattern | yes |
+
 ## A2A Integration
 
 ### A2A Client (outbound)
@@ -226,6 +255,10 @@ Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require
   - Sequential, Parallel, Loop pipelines with MCP tools
   - A2A chain delegation with proxy approval
   - Orchestrated pipelines accessed via A2A protocol
+- **Filesystem tests** (`e2e_filesystem_test.go`): MCP filesystem server tests on ports 9190-9324. Each test starts its own `mcp-filesystem` with isolated temp dirs (85 tests: E2E-001 to E2E-084, E2E-085 to E2E-119).
+  - Core journeys, read/write, patch (multi-hunk), copy/move (file+directory, cross-root), grep/glob (max_depth, subdirectory, context, truncation)
+  - Security: symlink escape, path traversal variants, null bytes, allowlist enforcement per root, readonly/restricted roots
+  - Error handling: nonexistent paths, type mismatches, missing params, invalid formats
 - **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests, use `mcp_servers`)
 
 ## Development Notes
@@ -233,10 +266,25 @@ Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require
 - **No CI/CD pipeline**: This project does not have a CI/CD pipeline. Tests are run locally via `make test` and `make e2e`.
 - **Minimal unit tests**: Unit test coverage is intentionally limited to core packages (auth, config, conversation, storage). The primary testing strategy relies on E2E tests that validate the full request flow.
 
+## Configuration (config/mcp-filesystem.yaml)
+
+```yaml
+host: 0.0.0.0
+port: 8091
+max_full_read_size: 1048576  # 1MB threshold for full reads
+
+roots:
+  - name: workspace
+    path: ./data/workspace
+    allowed_tools:
+      - "*"              # all tools, or list specific: read_file, write_file, etc.
+```
+
 ## Documentation Index
 
 - `.agent_docs/golang.md` - Go coding standards and project conventions
 - `.agent_docs/makefile.md` - Makefile targets and build documentation
+- `.agent_docs/filesystem.md` - MCP filesystem server: architecture, security model, tools, config, E2E tests
 - `docs/README.md` - Documentation index and reading order
 - `docs/overview.md` - Project overview, features, tech stack, quick start
 - `docs/architecture.md` - System architecture, component diagrams, data models, design decisions

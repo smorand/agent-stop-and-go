@@ -126,6 +126,59 @@ The included `mcp-resources` binary provides a SQLite-backed resource management
 | `resources_remove` | Remove resources by ID or name pattern | `true` | `id` (string), `pattern` (string, regex) |
 | `resources_list` | List resources, optionally filtered | `false` | `pattern` (string, regex, optional) |
 
+### Built-in MCP Server: mcp-filesystem
+
+The included `mcp-filesystem` binary provides a sandboxed filesystem server with chroot-like security. Each configured root directory is isolated — symlink-aware path validation prevents escape. Per-root tool allowlists control which operations are permitted.
+
+**Configuration** (`config/mcp-filesystem.yaml`):
+
+```yaml
+host: 0.0.0.0
+port: 8091
+max_full_read_size: 1048576  # 1MB threshold for full reads
+
+roots:
+  - name: workspace
+    path: ./data/workspace
+    allowed_tools:
+      - "*"              # all tools allowed
+  - name: readonly
+    path: ./data/docs
+    allowed_tools:
+      - read_file
+      - list_folder
+      - stat_file
+      - grep
+      - glob
+```
+
+**Available tools (15):**
+
+| Tool | Description | Read-only |
+|------|-------------|-----------|
+| `list_roots` | List configured roots and their allowed tools | yes |
+| `list_folder` | List directory contents (name, type, size, mtime) | yes |
+| `read_file` | Read file fully or partially (byte/line offsets) | yes |
+| `write_file` | Write file (overwrite/append/create_only modes) | no |
+| `remove_file` | Delete a single file | no |
+| `patch_file` | Apply unified diff patch atomically | no |
+| `create_folder` | Create directory with parents (idempotent) | no |
+| `remove_folder` | Remove directory recursively | no |
+| `stat_file` | File/directory metadata (size, mtime, type) | yes |
+| `hash_file` | Compute hash (md5, sha1, sha256) | yes |
+| `permissions_file` | Owner, group, permission bits | yes |
+| `copy` | Copy file/directory, potentially cross-root | no |
+| `move` | Move/rename, potentially cross-root | no |
+| `grep` | Regex search in file contents with context lines | yes |
+| `glob` | File name search by glob or regex pattern | yes |
+
+**Security features:**
+- Symlink-aware path validation using `filepath.EvalSymlinks` + `filepath.Abs`
+- Null byte rejection in paths
+- Non-existent path resolution walks up to nearest existing ancestor
+- Root directory itself cannot be removed
+- Binary file detection (null bytes in first 8KB) for read operations
+
 ### Custom MCP Servers
 
 Any server that speaks the MCP protocol can be used. Two transport options are available:
@@ -632,3 +685,5 @@ agent:
 | `agent` | `--config` | `config/agent.yaml` | Path to agent configuration file |
 | `web` | `--config` | `config/web.yaml` | Path to web configuration file |
 | `mcp-resources` | `--db` | `./resources.db` | Path to SQLite database |
+| `mcp-filesystem` | `--config` | (required) | Path to YAML config file |
+| `mcp-filesystem` | `--port` | (from config) | Override listen port |

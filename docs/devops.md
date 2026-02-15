@@ -20,17 +20,19 @@ Binaries are placed in `bin/` with platform suffixes:
 
 ```
 bin/
-├── agent-darwin-arm64          # macOS Apple Silicon
-├── agent-darwin-amd64          # macOS Intel
-├── agent-linux-amd64           # Linux
+├── agent-darwin-arm64              # macOS Apple Silicon
+├── agent-darwin-amd64              # macOS Intel
+├── agent-linux-amd64               # Linux
 ├── mcp-resources-darwin-arm64
 ├── mcp-resources-linux-amd64
+├── mcp-filesystem-darwin-arm64
+├── mcp-filesystem-linux-amd64
 ├── web-darwin-arm64
 ├── web-linux-amd64
-└── mcp-resources               # symlink (created by make e2e)
+└── mcp-resources                   # symlink (created by make e2e)
 ```
 
-The Makefile auto-detects all subdirectories under `cmd/` and builds each one. For this project, it builds three binaries: `agent`, `web`, and `mcp-resources`.
+The Makefile auto-detects all subdirectories under `cmd/` and builds each one. For this project, it builds four binaries: `agent`, `web`, `mcp-resources`, and `mcp-filesystem`.
 
 ### Running Locally
 
@@ -86,8 +88,8 @@ go test -v -tags=e2e -timeout 300s ./...
 ```
 
 **Prerequisites:**
-- `GEMINI_API_KEY` environment variable set
-- Built MCP binary (`make build` runs automatically via `make e2e`)
+- `GEMINI_API_KEY` environment variable set (required for agent and orchestration tests; not needed for filesystem-only tests)
+- Built binaries (`make build` runs automatically via `make e2e`)
 
 **E2E test files:**
 
@@ -95,6 +97,7 @@ go test -v -tags=e2e -timeout 300s ./...
 |------|-------|---------|----------|
 | `e2e_test.go` | Single-agent scenarios | 9090 | TS-001 to TS-014, TS-020 |
 | `e2e_orchestration_test.go` | Multi-agent orchestration | 9091-9092 | TS-022 to TS-028 |
+| `e2e_filesystem_test.go` | MCP filesystem server | 9190+ | Filesystem tool tests |
 
 **E2E test categories:**
 
@@ -105,6 +108,7 @@ go test -v -tags=e2e -timeout 300s ./...
 - **Orchestration**: Sequential, parallel, loop pipelines with MCP tools
 - **Chain delegation**: A2A chain with proxy approval
 - **Session tracing**: Custom session ID propagation
+- **Filesystem tools**: Core journeys, read/write, patch, copy/move, grep/glob, security (symlink escape, path traversal), error handling
 
 **Test configuration files** live in `testdata/`:
 
@@ -116,7 +120,7 @@ go test -v -tags=e2e -timeout 300s ./...
 | `testdata/e2e-chain-a.yaml` | A2A chain orchestrator config |
 | `testdata/e2e-chain-b.yaml` | A2A chain resource agent config |
 
-E2E tests start real HTTP servers on dedicated ports (9090-9092) and make actual LLM API calls to Gemini.
+E2E tests start real HTTP servers on dedicated ports (agent tests: 9090-9092, filesystem tests: 9190+) and make actual LLM API calls to Gemini.
 
 ### Test Execution Flow
 
@@ -126,7 +130,7 @@ flowchart LR
     B --> C["Create MCP symlink<br/>(bin/mcp-resources)"]
     C --> D["go test -v -tags=e2e<br/>-timeout 300s ./..."]
     D --> E["Start test servers<br/>(ports 9090-9092)"]
-    E --> F["Run test scenarios<br/>(TS-001 to TS-028)"]
+    E --> F["Run test scenarios<br/>(TS-001 to TS-028 + filesystem)"]
 ```
 
 ## Code Quality Tools

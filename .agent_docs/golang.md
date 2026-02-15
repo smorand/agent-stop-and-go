@@ -19,6 +19,7 @@ Project-specific Go conventions for Agent Stop and Go.
 - `internal/agent/`: Core agent logic (split across `agent.go` for simple mode, `orchestrator.go` for tree-based)
 - `internal/llm/`: Multi-provider LLM interface (`Client` interface, `GeminiClient`, `ClaudeClient`)
 - `internal/mcp/`: MCP JSON-RPC client (`client.go`), `CompositeClient` for multi-server aggregation (`client_composite.go`), and protocol types (`protocol.go`)
+- `internal/filesystem/`: MCP filesystem server — `config.go` (YAML config, root resolution), `security.go` (chroot path validation, symlink-aware), `patch.go` (unified diff parser/applier), `tools.go` (15 tool handlers)
 - `internal/a2a/`: A2A JSON-RPC client and protocol types
 - `internal/auth/`: Context-based auth propagation (Bearer tokens, session IDs)
 - `internal/config/`: YAML config loader

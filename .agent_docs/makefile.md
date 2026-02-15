@@ -76,14 +76,15 @@ make run-up                                               # Build + docker compo
 make run-down                                             # docker compose down
 ```
 
-Each command (`agent`, `web`, `mcp-resources`) gets its own Docker image with a single binary. No CGO required — all builds use `CGO_ENABLED=0`. Docker Compose runs 4 services: `mcp-resources`, `agent-a`, `agent-b`, `web`.
+Each command (`agent`, `web`, `mcp-resources`, `mcp-filesystem`) gets its own Docker image with a single binary. No CGO required — all builds use `CGO_ENABLED=0`. Docker Compose runs 4 services: `mcp-resources`, `agent-a`, `agent-b`, `web`.
 
 ## Multi-Command Detection
 
 The Makefile auto-detects `cmd/` subdirectories. For this project:
 - `cmd/agent/` → agent binary
 - `cmd/web/` → web chat frontend binary
-- `cmd/mcp-resources/` → MCP server binary
+- `cmd/mcp-resources/` → MCP resource server binary (SQLite)
+- `cmd/mcp-filesystem/` → MCP filesystem server binary (sandboxed file operations)
 
 Use `CMD=<name>` with `make run` to specify which binary to run:
 ```bash

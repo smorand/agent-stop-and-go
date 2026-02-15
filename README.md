@@ -11,6 +11,7 @@ A generic API for building async autonomous agents that can orchestrate tools (M
 - **Approval Workflow**: Destructive operations require explicit approval before execution
 - **Authorization Forwarding**: Bearer tokens are propagated to sub-agents (Zero Trust)
 - **Agent Orchestration**: Compose agents with sequential, parallel, and loop patterns (inspired by Google ADK)
+- **MCP Filesystem Server**: Sandboxed filesystem operations with chroot-like security, per-root tool allowlists, unified diff patching, grep, and glob
 - **Generic Architecture**: Swap the MCP server, LLM model, and prompt to create different agents
 - **Conversation Persistence**: All conversations are saved and can be resumed
 - **Docker Support**: Deployable as a Docker container
@@ -287,6 +288,22 @@ Multiple MCP servers can be configured simultaneously. A `CompositeClient` aggre
 ```
 
 Tools can have a `destructiveHint` property to trigger the approval workflow.
+
+### Built-in MCP Servers
+
+**mcp-resources**: SQLite-backed resource management (CRUD with approval for destructive operations).
+
+**mcp-filesystem**: Sandboxed filesystem operations with chroot-like security. Features:
+- 15 tools: list_roots, list_folder, read_file, write_file, remove_file, patch_file, create_folder, remove_folder, stat_file, hash_file, permissions_file, copy, move, grep, glob
+- Per-root directory isolation with symlink-aware path validation
+- Per-root tool allowlists (e.g., read-only roots, full-access roots)
+- Unified diff patching with atomic application
+- Regex-based content search (grep) and file name search (glob)
+
+```bash
+# Run the filesystem MCP server
+make run CMD=mcp-filesystem ARGS="--config config/mcp-filesystem.yaml"
+```
 
 ## A2A Protocol
 
