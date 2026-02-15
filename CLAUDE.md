@@ -255,8 +255,10 @@ Run with `make e2e` or `go test -v -tags=e2e -timeout 300s ./...`. Tests require
   - Sequential, Parallel, Loop pipelines with MCP tools
   - A2A chain delegation with proxy approval
   - Orchestrated pipelines accessed via A2A protocol
-- **Filesystem tests** (`e2e_filesystem_test.go`): MCP filesystem server tests on ports 9190+. Each test starts its own `mcp-filesystem` with isolated temp dirs.
-  - Core journeys, read/write, patch, copy/move, grep/glob, security (symlink escape, path traversal), error handling
+- **Filesystem tests** (`e2e_filesystem_test.go`): MCP filesystem server tests on ports 9190-9324. Each test starts its own `mcp-filesystem` with isolated temp dirs (85 tests: E2E-001 to E2E-084, E2E-085 to E2E-119).
+  - Core journeys, read/write, patch (multi-hunk), copy/move (file+directory, cross-root), grep/glob (max_depth, subdirectory, context, truncation)
+  - Security: symlink escape, path traversal variants, null bytes, allowlist enforcement per root, readonly/restricted roots
+  - Error handling: nonexistent paths, type mismatches, missing params, invalid formats
 - **Test configs**: `testdata/e2e-*.yaml` (isolated configs for orchestration tests, use `mcp_servers`)
 
 ## Development Notes
