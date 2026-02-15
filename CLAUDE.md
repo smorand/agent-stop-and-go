@@ -44,8 +44,10 @@ config/
 ├── mcp-resources.yaml            # MCP resources server config (local dev)
 ├── mcp-filesystem.yaml           # MCP filesystem server config (local dev)
 ├── mcp-resources-compose.yaml    # MCP resources server config (Docker Compose)
-├── agent-a.yaml                  # Docker Compose: orchestrator
-├── agent-b.yaml                  # Docker Compose: resource agent
+├── mcp-filesystem-compose.yaml   # MCP filesystem server config (Docker Compose)
+├── agent-a.yaml                  # Docker Compose: orchestrator (A2A → agent-b + agent-c)
+├── agent-b.yaml                  # Docker Compose: resource agent (MCP → mcp-resources)
+├── agent-c.yaml                  # Docker Compose: filesystem agent (MCP → mcp-filesystem)
 └── web-compose.yaml              # Docker Compose: web frontend
 cmd/
 ├── agent/main.go                 # API entry point
@@ -239,12 +241,29 @@ POST /approvals/{uuid} { "approved": true }
 Browser-based chat frontend that communicates with the agent via REST API. Configured via `config/web.yaml`:
 
 ```yaml
-agent_url: http://localhost:8080
+agent_url: http://localhost:8080   # Local dev (agent on same host)
+# In Docker Compose: agent_url: http://agent-a:8080
 host: 0.0.0.0
 port: 3000
 ```
 
 Routes: `GET /` (chat UI), `POST /api/send`, `POST /api/approve`, `GET /api/conversation/:id`
+
+## Docker Compose Architecture
+
+```
+web (:8080) → agent-a (:8081) → agent-b (:8082) → mcp-resources (:8090)
+                               → agent-c (:8083) → mcp-filesystem (:8091)
+```
+
+| Service | Port | Role | Config |
+|---------|------|------|--------|
+| mcp-resources | 8090 | MCP server: SQLite resource CRUD | `mcp-resources-compose.yaml` |
+| mcp-filesystem | 8091 | MCP server: sandboxed filesystem ops | `mcp-filesystem-compose.yaml` |
+| agent-b | 8082 | Resource agent (MCP tools) | `agent-b.yaml` |
+| agent-c | 8083 | Filesystem agent (MCP tools) | `agent-c.yaml` |
+| agent-a | 8081 | Orchestrator (A2A to agent-b + agent-c, answers general questions) | `agent-a.yaml` |
+| web | 8080 | Browser chat UI | `web-compose.yaml` |
 
 ## E2E Tests
 

@@ -153,7 +153,7 @@ docker run --rm -p 8080:8080 \
 
 ## Docker Compose: Multi-Agent Stack
 
-The Docker Compose deployment runs a complete multi-agent architecture with four services:
+The Docker Compose deployment runs a complete multi-agent architecture with six services:
 
 ```mermaid
 graph LR
@@ -161,13 +161,17 @@ graph LR
         Web["web<br/>Port 8080<br/>(Browser UI)"]
         AgentA["agent-a<br/>Port 8081<br/>(Orchestrator)"]
         AgentB["agent-b<br/>Port 8082<br/>(Resource Agent)"]
-        MCP["mcp-resources<br/>Port 8090<br/>(MCP Server)"]
+        AgentC["agent-c<br/>Port 8083<br/>(Filesystem Agent)"]
+        MCPR["mcp-resources<br/>Port 8090<br/>(MCP Server)"]
+        MCPF["mcp-filesystem<br/>Port 8091<br/>(MCP Server)"]
     end
 
     Browser["Browser"] -->|"HTTP :8080"| Web
     Web -->|"REST API"| AgentA
     AgentA -->|"A2A JSON-RPC"| AgentB
-    AgentB -->|"MCP Streamable HTTP"| MCP
+    AgentA -->|"A2A JSON-RPC"| AgentC
+    AgentB -->|"MCP Streamable HTTP"| MCPR
+    AgentC -->|"MCP Streamable HTTP"| MCPF
 ```
 
 ### Configuration Files
@@ -175,22 +179,17 @@ graph LR
 | File | Service | Description |
 |------|---------|-------------|
 | `config/mcp-resources-compose.yaml` | mcp-resources | MCP Streamable HTTP server (SQLite resources) |
-| `config/agent-a.yaml` | agent-a | Orchestrator: delegates all resource operations to agent-b via A2A |
+| `config/mcp-filesystem-compose.yaml` | mcp-filesystem | MCP Streamable HTTP server (sandboxed filesystem) |
+| `config/agent-a.yaml` | agent-a | Orchestrator: delegates resource operations to agent-b and filesystem operations to agent-c via A2A, answers general questions directly |
 | `config/agent-b.yaml` | agent-b | Resource agent: connects to mcp-resources via MCP Streamable HTTP |
+| `config/agent-c.yaml` | agent-c | Filesystem agent: connects to mcp-filesystem via MCP Streamable HTTP |
 | `config/web-compose.yaml` | web | Web frontend: connects to agent-a at `http://agent-a:8080` |
 
 ### Start the Stack
 
 ```bash
 export GEMINI_API_KEY=your-api-key
-make compose-up
-```
-
-Or directly:
-
-```bash
-export GEMINI_API_KEY=your-api-key
-docker-compose up --build
+make run-up
 ```
 
 ### Access Points
@@ -201,16 +200,19 @@ docker-compose up --build
 | Agent A API | http://localhost:8081 | Orchestrator REST API |
 | Agent A Docs | http://localhost:8081/docs | Interactive API documentation |
 | Agent B API | http://localhost:8082 | Resource agent REST API |
+| Agent C API | http://localhost:8083 | Filesystem agent REST API |
 | MCP Resources | http://localhost:8090 | MCP Streamable HTTP server |
+| MCP Filesystem | http://localhost:8091 | MCP Streamable HTTP server |
 
 ### Startup Order
 
 Services start in dependency order (enforced by `depends_on` with health checks):
 
-1. **mcp-resources** starts first (no dependencies)
+1. **mcp-resources** and **mcp-filesystem** start first (no dependencies)
 2. **agent-b** starts after mcp-resources is healthy
-3. **agent-a** starts after agent-b and mcp-resources are healthy
-4. **web** starts after agent-a is healthy
+3. **agent-c** starts after mcp-filesystem is healthy
+4. **agent-a** starts after agent-b and agent-c are healthy
+5. **web** starts after agent-a is healthy
 
 ### Log Correlation
 
@@ -220,8 +222,10 @@ All services write logs to the `./logs/` directory with a shared session prefix:
 # Logs appear in ./logs/ with a timestamp prefix
 logs/
 ├── 20260213_143022_a1b2c3d4_mcp-resources.log
+├── 20260213_143022_a1b2c3d4_mcp-filesystem.log
 ├── 20260213_143022_a1b2c3d4_agent-a.log
 ├── 20260213_143022_a1b2c3d4_agent-b.log
+├── 20260213_143022_a1b2c3d4_agent-c.log
 └── 20260213_143022_a1b2c3d4_web.log
 ```
 
@@ -230,9 +234,7 @@ Session IDs (`sid=`) in logs enable cross-agent request tracing.
 ### Stop the Stack
 
 ```bash
-make compose-down
-# or
-docker-compose down
+make run-down
 ```
 
 ### Docker Volumes
@@ -240,14 +242,16 @@ docker-compose down
 | Volume | Service | Purpose |
 |--------|---------|---------|
 | `mcp-resources-data` | mcp-resources | Persistent SQLite database storage |
+| `mcp-filesystem-data` | mcp-filesystem | Persistent filesystem workspace storage |
 | `agent-a-data` | agent-a | Persistent conversation storage |
 | `agent-b-data` | agent-b | Persistent conversation storage |
+| `agent-c-data` | agent-c | Persistent conversation storage |
 | `./logs` | all | Shared log directory (bind mount) |
 
 To clear all data:
 
 ```bash
-docker-compose down -v
+docker compose down -v
 ```
 
 ## Request Flow in Multi-Agent Deployment
@@ -303,7 +307,9 @@ In Docker Compose, use health checks to verify service readiness:
 # Check all services
 curl http://localhost:8081/health   # agent-a
 curl http://localhost:8082/health   # agent-b
+curl http://localhost:8083/health   # agent-c
 curl http://localhost:8090/health   # mcp-resources
+curl http://localhost:8091/health   # mcp-filesystem
 curl http://localhost:8080/         # web (returns HTML)
 ```
 
@@ -346,6 +352,6 @@ The current architecture is designed for single-instance deployment per agent:
 
 To rollback a deployment:
 
-1. Stop the current containers: `docker-compose down`
-2. Rebuild with the previous code version: `docker-compose up --build`
+1. Stop the current containers: `make run-down`
+2. Rebuild with the previous code version: `make run-up`
 3. Conversation data in Docker volumes is preserved across deployments

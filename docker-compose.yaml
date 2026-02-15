@@ -21,7 +21,30 @@ services:
     ports:
       - "8090:8080"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+  mcp-filesystem:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-mcp-filesystem:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: mcp-filesystem
+        HAS_INTERNAL: "no"
+    command: >
+      sh -c "mkdir -p /app/data/workspace && /app/bin/app --config /app/config/mcp-filesystem-compose.yaml 2>&1 | tee /logs/${LOG_SESSION}_mcp-filesystem.log"
+
+    volumes:
+      - mcp-filesystem-data:/app/data
+      - ./logs:/logs
+    expose:
+      - "8080"
+    ports:
+      - "8091:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
       interval: 2s
       timeout: 3s
       retries: 5
@@ -48,7 +71,34 @@ services:
       mcp-resources:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+  agent-c:
+    image: ${DOCKER_PREFIX:-}${PROJECT_NAME:-agent-stop-and-go}-agent:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      args:
+        GO_BIN: agent
+        HAS_INTERNAL: "yes"
+    command: >
+      sh -c "/app/bin/app --config /app/config/agent-c.yaml 2>&1 | tee /logs/${LOG_SESSION}_agent-c.log"
+
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - agent-c-data:/app/data
+      - ./logs:/logs
+    ports:
+      - "8083:8080"
+    depends_on:
+      mcp-filesystem:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
       interval: 2s
       timeout: 3s
       retries: 5
@@ -74,10 +124,10 @@ services:
     depends_on:
       agent-b:
         condition: service_healthy
-      mcp-resources:
+      agent-c:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
       interval: 2s
       timeout: 3s
       retries: 5
@@ -101,5 +151,7 @@ services:
         condition: service_healthy
 volumes:
   mcp-resources-data:
+  mcp-filesystem-data:
   agent-a-data:
   agent-b-data:
+  agent-c-data:

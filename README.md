@@ -47,23 +47,31 @@ make docker-run
 
 ### Docker Compose (Multi-Agent)
 
-Run the full multi-agent chain (orchestrator + resource agent + web frontend):
+Run the full multi-agent setup (orchestrator + resource agent + filesystem agent + web frontend):
 
 ```bash
 export GEMINI_API_KEY=your-api-key
-docker-compose up --build
+make run-up
 ```
 
 This starts:
-- **agent-b** (port 8082): Resource agent with MCP tools
-- **agent-a** (port 8080): Orchestrator delegating to agent-b via A2A
-- **web** (port 3000): Browser-based chat UI
+- **mcp-resources** (port 8090): MCP server for resource management (SQLite)
+- **mcp-filesystem** (port 8091): MCP server for sandboxed filesystem operations
+- **agent-b** (port 8082): Resource agent → mcp-resources
+- **agent-c** (port 8083): Filesystem agent → mcp-filesystem
+- **agent-a** (port 8081): Orchestrator delegating to agent-b and agent-c via A2A, also answers general questions
+- **web** (port 8080): Browser-based chat UI
 
-Open http://localhost:3000 to interact.
+```
+web (:8080) → agent-a (:8081) → agent-b (:8082) → mcp-resources (:8090)
+                               → agent-c (:8083) → mcp-filesystem (:8091)
+```
+
+Open http://localhost:8080 to interact.
 
 ```bash
 # Stop all services
-docker-compose down
+make run-down
 ```
 
 ## Usage

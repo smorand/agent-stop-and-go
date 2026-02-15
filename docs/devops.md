@@ -217,31 +217,37 @@ flowchart TD
 
 ### Docker Compose
 
-The `docker-compose.yaml` defines a four-service stack:
+The `docker-compose.yaml` defines a six-service stack:
 
 ```mermaid
 graph LR
     Web["web<br/>:8080"] -->|"REST API"| AgentA["agent-a<br/>:8081<br/>(orchestrator)"]
     AgentA -->|"A2A JSON-RPC"| AgentB["agent-b<br/>:8082<br/>(resources)"]
-    AgentB -->|"MCP HTTP"| MCP["mcp-resources<br/>:8090<br/>(tools)"]
+    AgentA -->|"A2A JSON-RPC"| AgentC["agent-c<br/>:8083<br/>(filesystem)"]
+    AgentB -->|"MCP HTTP"| MCPR["mcp-resources<br/>:8090<br/>(tools)"]
+    AgentC -->|"MCP HTTP"| MCPF["mcp-filesystem<br/>:8091<br/>(tools)"]
 ```
 
 | Service | Config File | Port (host:container) | Role |
 |---------|------------|------|------|
 | `mcp-resources` | `config/mcp-resources-compose.yaml` | 8090:8080 | MCP Streamable HTTP server (SQLite resources) |
+| `mcp-filesystem` | `config/mcp-filesystem-compose.yaml` | 8091:8080 | MCP Streamable HTTP server (sandboxed filesystem) |
 | `agent-b` | `config/agent-b.yaml` | 8082:8080 | Resource agent, connects to mcp-resources |
-| `agent-a` | `config/agent-a.yaml` | 8081:8080 | Orchestrator, delegates to agent-b via A2A |
+| `agent-c` | `config/agent-c.yaml` | 8083:8080 | Filesystem agent, connects to mcp-filesystem |
+| `agent-a` | `config/agent-a.yaml` | 8081:8080 | Orchestrator, delegates to agent-b and agent-c via A2A |
 | `web` | `config/web-compose.yaml` | 8080:8080 | Browser-based chat UI |
 
-**Startup order**: `mcp-resources` -> `agent-b` -> `agent-a` -> `web` (enforced by `depends_on` with health checks).
+**Startup order**: `mcp-resources` + `mcp-filesystem` -> `agent-b` + `agent-c` -> `agent-a` -> `web` (enforced by `depends_on` with health checks).
 
 **Volumes:**
 
 | Volume | Service | Purpose |
 |--------|---------|---------|
 | `mcp-resources-data` | mcp-resources | Persistent SQLite database storage |
+| `mcp-filesystem-data` | mcp-filesystem | Persistent filesystem workspace storage |
 | `agent-a-data` | agent-a | Persistent conversation storage |
 | `agent-b-data` | agent-b | Persistent conversation storage |
+| `agent-c-data` | agent-c | Persistent conversation storage |
 | `./logs` | all | Shared log directory (bind mount) |
 
 ## Logging
@@ -262,13 +268,15 @@ Example:
 
 ### Docker Compose Log Correlation
 
-When running via `make compose-up`, each service writes its output to `./logs/` with a shared timestamp prefix:
+When running via `make run-up`, each service writes its output to `./logs/` with a shared timestamp prefix:
 
 ```
 logs/
 ├── 20260213_143022_a1b2c3d4_mcp-resources.log
+├── 20260213_143022_a1b2c3d4_mcp-filesystem.log
 ├── 20260213_143022_a1b2c3d4_agent-a.log
 ├── 20260213_143022_a1b2c3d4_agent-b.log
+├── 20260213_143022_a1b2c3d4_agent-c.log
 └── 20260213_143022_a1b2c3d4_web.log
 ```
 

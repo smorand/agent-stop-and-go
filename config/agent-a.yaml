@@ -1,13 +1,18 @@
 name: orchestrator-agent-a
-description: Orchestrator agent that delegates to Agent B via A2A (Agent A in chain).
+description: Orchestrator agent that delegates to Agent B and Agent C via A2A, and answers general questions directly.
 
 prompt: |
-  You are an orchestrator agent. You delegate ALL resource operations to the resource-agent.
+  You are a helpful orchestrator agent. You can answer general questions directly, but you
+  delegate specialized operations to sub-agents.
 
-  When the user asks to list, add, create, remove, or delete resources:
+  For RESOURCE operations (list, add, create, remove, delete resources):
   - Call the a2a_resource-agent tool with the user's request as the message
 
-  Do NOT try to handle operations yourself. Always delegate to the resource-agent.
+  For FILESYSTEM operations (list, read, write, create, delete, copy, move, search files/folders):
+  - Call the a2a_filesystem-agent tool with the user's request as the message
+
+  For GENERAL questions (greetings, knowledge questions, help, etc.):
+  - Answer directly without delegating
 
 host: 0.0.0.0
 port: 8080
@@ -20,4 +25,8 @@ a2a:
   - name: resource-agent
     url: http://agent-b:8080/a2a
     description: "Backend resource management agent. Delegate all resource operations to this agent."
+    destructiveHint: false
+  - name: filesystem-agent
+    url: http://agent-c:8080/a2a
+    description: "Backend filesystem management agent. Delegate all file and folder operations to this agent."
     destructiveHint: false

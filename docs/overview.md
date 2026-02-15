@@ -94,9 +94,9 @@ curl -X POST http://localhost:8080/conversations \
 export GEMINI_API_KEY=your-api-key
 make docker-run
 
-# Multi-agent stack (orchestrator + resource agent + web UI)
-docker-compose up --build
-# Open http://localhost:3000
+# Multi-agent stack (orchestrator + resource agent + filesystem agent + web UI)
+make run-up
+# Open http://localhost:8080
 ```
 
 ## Project Structure
@@ -121,11 +121,13 @@ agent-stop-and-go/
 │   └── storage/                   # JSON file persistence
 ├── config/                        # YAML configuration files
 │   ├── agent.yaml                 # Default single-agent config
-│   ├── agent-a.yaml               # Docker Compose: orchestrator
-│   ├── agent-b.yaml               # Docker Compose: resource agent
+│   ├── agent-a.yaml               # Docker Compose: orchestrator (A2A → agent-b + agent-c)
+│   ├── agent-b.yaml               # Docker Compose: resource agent (MCP → mcp-resources)
+│   ├── agent-c.yaml               # Docker Compose: filesystem agent (MCP → mcp-filesystem)
 │   ├── mcp-resources.yaml         # MCP resources server config (local dev)
 │   ├── mcp-filesystem.yaml        # MCP filesystem server config (local dev)
 │   ├── mcp-resources-compose.yaml # MCP resources server config (Docker Compose)
+│   ├── mcp-filesystem-compose.yaml # MCP filesystem server config (Docker Compose)
 │   ├── web.yaml                   # Web frontend config (local dev)
 │   └── web-compose.yaml           # Web frontend config (Docker Compose)
 ├── examples/                      # Ready-to-use configuration examples

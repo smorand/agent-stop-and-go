@@ -35,6 +35,7 @@ graph TB
     subgraph "Storage"
         JSONFiles["Conversation Files<br/>(JSON on disk)"]
         SQLite["SQLite DB<br/>(MCP resources)"]
+        FSData["Filesystem Data<br/>(MCP filesystem)"]
     end
 
     WebUI -->|"REST API"| API
@@ -58,6 +59,7 @@ graph TB
     Simple --> JSONFiles
     Orch --> JSONFiles
     MCP --> SQLite
+    MCP --> FSData
 ```
 
 ## Package Responsibilities
