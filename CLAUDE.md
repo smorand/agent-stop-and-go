@@ -282,6 +282,7 @@ roots:
 
 - `.agent_docs/golang.md` - Go coding standards and project conventions
 - `.agent_docs/makefile.md` - Makefile targets and build documentation
+- `.agent_docs/filesystem.md` - MCP filesystem server: architecture, security model, tools, config, E2E tests
 - `docs/README.md` - Documentation index and reading order
 - `docs/overview.md` - Project overview, features, tech stack, quick start
 - `docs/architecture.md` - System architecture, component diagrams, data models, design decisions

@@ -178,12 +178,14 @@ This ID will propagate to all downstream A2A agents.
 
 ### MCP Server Security
 
-The MCP server (`mcp-resources`) can run in two modes:
+MCP servers (`mcp-resources`, `mcp-filesystem`, or custom) can run in two modes:
 
 - **Streamable HTTP** (preferred): Runs as a standalone HTTP service. In Docker Compose, it runs as a separate container on the internal network. It does not receive or process Bearer tokens.
 - **stdio** (legacy): Runs as a subprocess of the agent. It communicates exclusively via stdin/stdout and has no network exposure.
 
-In both cases, the MCP server does not participate in authentication -- Bearer tokens are not forwarded to MCP servers.
+In both cases, MCP servers do not participate in authentication -- Bearer tokens are not forwarded to MCP servers.
+
+The `mcp-filesystem` server provides additional security through its sandboxing model: each root directory is chroot-isolated with symlink-aware path validation, and per-root tool allowlists control which operations are permitted. See [Functionalities](functionalities.md#built-in-mcp-server-mcp-filesystem) for details.
 
 ### Docker Security
 
