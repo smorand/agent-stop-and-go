@@ -1386,3 +1386,839 @@ func httpGet(url string) (int, error) {
 	defer resp.Body.Close()
 	return resp.StatusCode, nil
 }
+
+// =============================================================================
+// Coverage gap tests: hash_file, permissions_file, stat_file, read_file,
+// list_folder, grep, glob, move, patch_file, write_file, copy edge cases
+// =============================================================================
+
+// --- E2E-085: hash_file md5 algorithm ---
+func TestFS_E2E085_HashMD5(t *testing.T) {
+	env := setupFSTest(t, 9280, 0)
+
+	content := "md5 test content\n"
+	os.WriteFile(filepath.Join(env.rootDir, "md5test.txt"), []byte(content), 0644)
+
+	result := callToolExpectSuccess(t, env.client, "hash_file", map[string]any{
+		"root": "workspace", "path": "md5test.txt", "algorithm": "md5",
+	})
+	if result["algorithm"].(string) != "md5" {
+		t.Fatalf("Expected algorithm=md5, got %q", result["algorithm"])
+	}
+	hashVal := result["hash"].(string)
+	if len(hashVal) != 32 { // md5 hex is 32 chars
+		t.Fatalf("Expected 32-char md5 hash, got %d chars: %s", len(hashVal), hashVal)
+	}
+}
+
+// --- E2E-086: hash_file sha1 algorithm ---
+func TestFS_E2E086_HashSHA1(t *testing.T) {
+	env := setupFSTest(t, 9281, 0)
+
+	content := "sha1 test content\n"
+	os.WriteFile(filepath.Join(env.rootDir, "sha1test.txt"), []byte(content), 0644)
+
+	result := callToolExpectSuccess(t, env.client, "hash_file", map[string]any{
+		"root": "workspace", "path": "sha1test.txt", "algorithm": "sha1",
+	})
+	if result["algorithm"].(string) != "sha1" {
+		t.Fatalf("Expected algorithm=sha1, got %q", result["algorithm"])
+	}
+	hashVal := result["hash"].(string)
+	if len(hashVal) != 40 { // sha1 hex is 40 chars
+		t.Fatalf("Expected 40-char sha1 hash, got %d chars: %s", len(hashVal), hashVal)
+	}
+}
+
+// --- E2E-087: hash_file nonexistent file ---
+func TestFS_E2E087_HashNonexistent(t *testing.T) {
+	env := setupFSTest(t, 9282, 0)
+
+	errMsg := callToolExpectError(t, env.client, "hash_file", map[string]any{
+		"root": "workspace", "path": "ghost.txt", "algorithm": "sha256",
+	})
+	if !strings.Contains(errMsg, "not found") {
+		t.Fatalf("Expected 'not found' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-088: permissions_file on directory ---
+func TestFS_E2E088_PermissionsDirectory(t *testing.T) {
+	env := setupFSTest(t, 9283, 0)
+
+	os.MkdirAll(filepath.Join(env.rootDir, "permdir"), 0750)
+
+	result := callToolExpectSuccess(t, env.client, "permissions_file", map[string]any{
+		"root": "workspace", "path": "permdir",
+	})
+	mode := result["mode"].(string)
+	if mode != "0750" {
+		t.Fatalf("Expected mode=0750, got %s", mode)
+	}
+	// Verify owner and group fields are present
+	if _, ok := result["owner"]; !ok {
+		t.Fatal("Expected 'owner' field in permissions result")
+	}
+	if _, ok := result["group"]; !ok {
+		t.Fatal("Expected 'group' field in permissions result")
+	}
+}
+
+// --- E2E-089: permissions_file nonexistent path ---
+func TestFS_E2E089_PermissionsNonexistent(t *testing.T) {
+	env := setupFSTest(t, 9284, 0)
+
+	errMsg := callToolExpectError(t, env.client, "permissions_file", map[string]any{
+		"root": "workspace", "path": "no_such_file",
+	})
+	if !strings.Contains(errMsg, "not found") {
+		t.Fatalf("Expected 'not found' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-090: stat_file nonexistent path ---
+func TestFS_E2E090_StatNonexistent(t *testing.T) {
+	env := setupFSTest(t, 9285, 0)
+
+	errMsg := callToolExpectError(t, env.client, "stat_file", map[string]any{
+		"root": "workspace", "path": "nonexistent.txt",
+	})
+	if !strings.Contains(errMsg, "not found") {
+		t.Fatalf("Expected 'not found' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-091: stat_file on symlink within root resolves to target ---
+// Security note: ValidatePath resolves symlinks before reaching the handler,
+// so stat_file sees the resolved target, not the symlink itself.
+// This test verifies stat_file returns correct metadata for a symlink target.
+func TestFS_E2E091_StatSymlinkResolvesToTarget(t *testing.T) {
+	env := setupFSTest(t, 9286, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "target.txt"), []byte("target content"), 0644)
+	os.Symlink(filepath.Join(env.rootDir, "target.txt"), filepath.Join(env.rootDir, "link.txt"))
+
+	result := callToolExpectSuccess(t, env.client, "stat_file", map[string]any{
+		"root": "workspace", "path": "link.txt",
+	})
+	// After symlink resolution, it behaves as the target file
+	if result["is_directory"] != false {
+		t.Fatal("Expected is_directory=false for resolved symlink target")
+	}
+	size := int64(result["size"].(float64))
+	if size != 14 { // len("target content") = 14
+		t.Fatalf("Expected size=14 (target file size), got %d", size)
+	}
+	if result["name"].(string) != "target.txt" {
+		t.Fatalf("Expected name=target.txt (resolved target), got %q", result["name"])
+	}
+}
+
+// --- E2E-092: list_folder shows symlink entries with target_type ---
+func TestFS_E2E092_ListFolderSymlinkEntries(t *testing.T) {
+	env := setupFSTest(t, 9287, 0)
+
+	// Create a file, a directory, and symlinks to each
+	os.WriteFile(filepath.Join(env.rootDir, "realfile.txt"), []byte("content"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "realdir"), 0755)
+	os.Symlink(filepath.Join(env.rootDir, "realfile.txt"), filepath.Join(env.rootDir, "link_to_file"))
+	os.Symlink(filepath.Join(env.rootDir, "realdir"), filepath.Join(env.rootDir, "link_to_dir"))
+	os.Symlink("/tmp", filepath.Join(env.rootDir, "link_external"))
+
+	result := callToolExpectSuccess(t, env.client, "list_folder", map[string]any{
+		"root": "workspace", "path": ".",
+	})
+
+	entries := result["entries"].([]any)
+	entryMap := make(map[string]map[string]any)
+	for _, e := range entries {
+		entry := e.(map[string]any)
+		entryMap[entry["name"].(string)] = entry
+	}
+
+	// Check symlink to file
+	linkFile, ok := entryMap["link_to_file"]
+	if !ok {
+		t.Fatal("Expected link_to_file in listing")
+	}
+	if linkFile["type"].(string) != "symlink" {
+		t.Fatalf("Expected type=symlink for link_to_file, got %q", linkFile["type"])
+	}
+	if linkFile["target_type"].(string) != "file" {
+		t.Fatalf("Expected target_type=file for link_to_file, got %q", linkFile["target_type"])
+	}
+
+	// Check symlink to directory
+	linkDir, ok := entryMap["link_to_dir"]
+	if !ok {
+		t.Fatal("Expected link_to_dir in listing")
+	}
+	if linkDir["type"].(string) != "symlink" {
+		t.Fatalf("Expected type=symlink for link_to_dir, got %q", linkDir["type"])
+	}
+	if linkDir["target_type"].(string) != "directory" {
+		t.Fatalf("Expected target_type=directory for link_to_dir, got %q", linkDir["target_type"])
+	}
+
+	// Check symlink to external (outside root)
+	linkExt, ok := entryMap["link_external"]
+	if !ok {
+		t.Fatal("Expected link_external in listing")
+	}
+	if linkExt["type"].(string) != "symlink" {
+		t.Fatalf("Expected type=symlink for link_external, got %q", linkExt["type"])
+	}
+	if linkExt["target_type"].(string) != "external" {
+		t.Fatalf("Expected target_type=external for link_external, got %q", linkExt["target_type"])
+	}
+}
+
+// --- E2E-093: list_folder nonexistent path ---
+func TestFS_E2E093_ListFolderNonexistent(t *testing.T) {
+	env := setupFSTest(t, 9288, 0)
+
+	errMsg := callToolExpectError(t, env.client, "list_folder", map[string]any{
+		"root": "workspace", "path": "does_not_exist",
+	})
+	if !strings.Contains(errMsg, "not found") {
+		t.Fatalf("Expected 'not found' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-094: read_file nonexistent file ---
+func TestFS_E2E094_ReadFileNonexistent(t *testing.T) {
+	env := setupFSTest(t, 9289, 0)
+
+	errMsg := callToolExpectError(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "no_such_file.txt",
+	})
+	if !strings.Contains(errMsg, "not found") {
+		t.Fatalf("Expected 'not found' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-095: read_file on directory ---
+func TestFS_E2E095_ReadFileIsDirectory(t *testing.T) {
+	env := setupFSTest(t, 9300, 0)
+
+	os.MkdirAll(filepath.Join(env.rootDir, "adir"), 0755)
+
+	errMsg := callToolExpectError(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "adir",
+	})
+	if !strings.Contains(errMsg, "directory") {
+		t.Fatalf("Expected 'directory' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-096: grep with max_depth parameter ---
+// max_depth controls directory traversal: dirs with depth > max_depth are skipped.
+// Depth is the number of path separators in the relative path from search root.
+// d1 → depth=0, d1/d2 → depth=1, d1/d2/d3 → depth=2.
+func TestFS_E2E096_GrepMaxDepth(t *testing.T) {
+	env := setupFSTest(t, 9301, 0)
+
+	// Create nested directories with matching files at various depths
+	os.WriteFile(filepath.Join(env.rootDir, "root.txt"), []byte("MATCH\n"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "d1", "d2", "d3"), 0755)
+	os.WriteFile(filepath.Join(env.rootDir, "d1", "depth1.txt"), []byte("MATCH\n"), 0644)
+	os.WriteFile(filepath.Join(env.rootDir, "d1", "d2", "depth2.txt"), []byte("MATCH\n"), 0644)
+	os.WriteFile(filepath.Join(env.rootDir, "d1", "d2", "d3", "depth3.txt"), []byte("MATCH\n"), 0644)
+
+	// max_depth=0: d1 dir has depth=0, 0 > 0 = false, so d1 is entered.
+	// d1/d2 dir has depth=1, 1 > 0 = true, so d2 is skipped.
+	// Matches: root.txt + d1/depth1.txt = 2
+	result := callToolExpectSuccess(t, env.client, "grep", map[string]any{
+		"root": "workspace", "pattern": "MATCH", "max_depth": 0,
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 2 {
+		t.Fatalf("Expected 2 matches at max_depth=0, got %d", totalMatches)
+	}
+
+	// max_depth=1: d1 (depth=0) entered, d1/d2 (depth=1, 1>1=false) entered,
+	// d1/d2/d3 (depth=2, 2>1=true) skipped.
+	// Matches: root.txt, d1/depth1.txt, d1/d2/depth2.txt = 3
+	result = callToolExpectSuccess(t, env.client, "grep", map[string]any{
+		"root": "workspace", "pattern": "MATCH", "max_depth": 1,
+	})
+	totalMatches = int(result["total_matches"].(float64))
+	if totalMatches != 3 {
+		t.Fatalf("Expected 3 matches at max_depth=1 (d3 skipped), got %d", totalMatches)
+	}
+}
+
+// --- E2E-097: grep in subdirectory path ---
+func TestFS_E2E097_GrepSubdirectory(t *testing.T) {
+	env := setupFSTest(t, 9302, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "top.txt"), []byte("FINDME\n"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "sub"), 0755)
+	os.WriteFile(filepath.Join(env.rootDir, "sub", "inner.txt"), []byte("FINDME\n"), 0644)
+
+	// Search only in "sub" subdirectory
+	result := callToolExpectSuccess(t, env.client, "grep", map[string]any{
+		"root": "workspace", "pattern": "FINDME", "path": "sub",
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 1 {
+		t.Fatalf("Expected 1 match in sub dir, got %d", totalMatches)
+	}
+	matches := result["matches"].([]any)
+	m := matches[0].(map[string]any)
+	if m["file"].(string) != "inner.txt" {
+		t.Fatalf("Expected match in inner.txt, got %q", m["file"])
+	}
+}
+
+// --- E2E-098: glob with max_depth parameter ---
+// max_depth controls directory traversal: dirs with depth > max_depth are skipped.
+// Depth is computed as the number of path separators in the relative path.
+// d1 → depth=0, d1/d2 → depth=1, d1/d2/d3 → depth=2.
+func TestFS_E2E098_GlobMaxDepth(t *testing.T) {
+	env := setupFSTest(t, 9303, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "root.go"), []byte("a"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "d1", "d2"), 0755)
+	os.WriteFile(filepath.Join(env.rootDir, "d1", "level1.go"), []byte("b"), 0644)
+	os.WriteFile(filepath.Join(env.rootDir, "d1", "d2", "level2.go"), []byte("c"), 0644)
+
+	// max_depth=0: d1 dir has depth=0 (rel="d1", 0 separators). 0 > 0 = false, so d1 is entered.
+	// d1/d2 dir has depth=1 (rel="d1/d2"). 1 > 0 = true, so d2 is skipped.
+	// Matches: root.go + d1/level1.go = 2 .go files
+	result := callToolExpectSuccess(t, env.client, "glob", map[string]any{
+		"root": "workspace", "pattern": "*.go", "max_depth": 0,
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 2 {
+		t.Fatalf("Expected 2 matches at max_depth=0, got %d", totalMatches)
+	}
+}
+
+// --- E2E-099: glob in subdirectory path ---
+func TestFS_E2E099_GlobSubdirectory(t *testing.T) {
+	env := setupFSTest(t, 9304, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "top.go"), []byte("a"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "pkg"), 0755)
+	os.WriteFile(filepath.Join(env.rootDir, "pkg", "inner.go"), []byte("b"), 0644)
+
+	result := callToolExpectSuccess(t, env.client, "glob", map[string]any{
+		"root": "workspace", "pattern": "*.go", "path": "pkg",
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 1 {
+		t.Fatalf("Expected 1 match in pkg subdir, got %d", totalMatches)
+	}
+	matches := result["matches"].([]any)
+	m := matches[0].(map[string]any)
+	if m["path"].(string) != "inner.go" {
+		t.Fatalf("Expected inner.go, got %q", m["path"])
+	}
+}
+
+// --- E2E-100: glob max_results truncation ---
+func TestFS_E2E100_GlobMaxResults(t *testing.T) {
+	env := setupFSTest(t, 9305, 0)
+
+	// Create 10 files
+	for i := range 10 {
+		os.WriteFile(filepath.Join(env.rootDir, fmt.Sprintf("file_%02d.txt", i)), []byte("x"), 0644)
+	}
+
+	result := callToolExpectSuccess(t, env.client, "glob", map[string]any{
+		"root": "workspace", "pattern": "*.txt", "max_results": 3,
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 3 {
+		t.Fatalf("Expected 3 matches, got %d", totalMatches)
+	}
+	if result["truncated"] != true {
+		t.Fatal("Expected truncated=true")
+	}
+}
+
+// --- E2E-101: move directory within same root ---
+func TestFS_E2E101_MoveDirectory(t *testing.T) {
+	env := setupFSTest(t, 9306, 0)
+
+	os.MkdirAll(filepath.Join(env.rootDir, "src", "sub"), 0755)
+	os.WriteFile(filepath.Join(env.rootDir, "src", "a.txt"), []byte("a"), 0644)
+	os.WriteFile(filepath.Join(env.rootDir, "src", "sub", "b.txt"), []byte("b"), 0644)
+
+	callToolExpectSuccess(t, env.client, "move", map[string]any{
+		"source_root": "workspace", "source_path": "src",
+		"dest_root": "workspace", "dest_path": "dst",
+	})
+
+	// Source should not exist
+	callToolExpectError(t, env.client, "stat_file", map[string]any{
+		"root": "workspace", "path": "src",
+	})
+
+	// Destination should have the content
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "dst/a.txt",
+	})
+	if result["content"].(string) != "a" {
+		t.Fatal("Moved directory content mismatch for a.txt")
+	}
+
+	result = callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "dst/sub/b.txt",
+	})
+	if result["content"].(string) != "b" {
+		t.Fatal("Moved directory content mismatch for sub/b.txt")
+	}
+}
+
+// --- E2E-102: write_file default mode (no mode param) acts as overwrite ---
+func TestFS_E2E102_WriteFileDefaultMode(t *testing.T) {
+	env := setupFSTest(t, 9307, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "default.txt"), []byte("original"), 0644)
+
+	// Call without specifying mode — should default to overwrite
+	result := callToolExpectSuccess(t, env.client, "write_file", map[string]any{
+		"root": "workspace", "path": "default.txt", "content": "replaced",
+	})
+	if result["mode"].(string) != "overwrite" {
+		t.Fatalf("Expected mode=overwrite, got %q", result["mode"])
+	}
+
+	readResult := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "default.txt",
+	})
+	if readResult["content"].(string) != "replaced" {
+		t.Fatalf("Expected 'replaced', got %q", readResult["content"])
+	}
+}
+
+// --- E2E-103: write_file missing content parameter ---
+func TestFS_E2E103_WriteFileMissingContent(t *testing.T) {
+	env := setupFSTest(t, 9308, 0)
+
+	errMsg := callToolExpectError(t, env.client, "write_file", map[string]any{
+		"root": "workspace", "path": "test.txt",
+	})
+	if !strings.Contains(errMsg, "content") && !strings.Contains(errMsg, "required") {
+		t.Fatalf("Expected 'content required' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-104: patch_file with multiple hunks ---
+func TestFS_E2E104_PatchFileMultipleHunks(t *testing.T) {
+	env := setupFSTest(t, 9309, 0)
+
+	original := "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n"
+	os.WriteFile(filepath.Join(env.rootDir, "multi.txt"), []byte(original), 0644)
+
+	// Patch modifies line 2 and line 9 in two separate hunks
+	patch := `--- a/multi.txt
++++ b/multi.txt
+@@ -1,3 +1,3 @@
+ line 1
+-line 2
++line TWO
+ line 3
+@@ -8,3 +8,3 @@
+ line 8
+-line 9
++line NINE
+ line 10`
+	result := callToolExpectSuccess(t, env.client, "patch_file", map[string]any{
+		"root": "workspace", "path": "multi.txt", "patch": patch,
+	})
+	if result["hunks_applied"].(float64) != 2 {
+		t.Fatalf("Expected 2 hunks applied, got %v", result["hunks_applied"])
+	}
+
+	readResult := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "multi.txt",
+	})
+	content := readResult["content"].(string)
+	if !strings.Contains(content, "line TWO") {
+		t.Fatal("Expected 'line TWO' in patched content")
+	}
+	if !strings.Contains(content, "line NINE") {
+		t.Fatal("Expected 'line NINE' in patched content")
+	}
+	// Original unchanged lines should still be present
+	if !strings.Contains(content, "line 5") {
+		t.Fatal("Expected 'line 5' (unchanged) in patched content")
+	}
+}
+
+// --- E2E-105: patch_file missing patch parameter ---
+func TestFS_E2E105_PatchFileMissingPatch(t *testing.T) {
+	env := setupFSTest(t, 9310, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "file.txt"), []byte("data\n"), 0644)
+
+	errMsg := callToolExpectError(t, env.client, "patch_file", map[string]any{
+		"root": "workspace", "path": "file.txt",
+	})
+	if !strings.Contains(errMsg, "patch") && !strings.Contains(errMsg, "required") {
+		t.Fatalf("Expected 'patch required' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-106: copy creates nested parent directories at destination ---
+func TestFS_E2E106_CopyCreatesParentDirs(t *testing.T) {
+	env := setupFSTest(t, 9311, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "original.txt"), []byte("nested copy"), 0644)
+
+	callToolExpectSuccess(t, env.client, "copy", map[string]any{
+		"source_root": "workspace", "source_path": "original.txt",
+		"dest_root": "workspace", "dest_path": "deep/nested/copy.txt",
+	})
+
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "deep/nested/copy.txt",
+	})
+	if result["content"].(string) != "nested copy" {
+		t.Fatal("Nested copy content mismatch")
+	}
+}
+
+// --- E2E-107: glob neither pattern nor regex provided ---
+func TestFS_E2E107_GlobNeitherPatternNorRegex(t *testing.T) {
+	env := setupFSTest(t, 9312, 0)
+
+	errMsg := callToolExpectError(t, env.client, "glob", map[string]any{
+		"root": "workspace",
+	})
+	if !strings.Contains(errMsg, "exactly one") {
+		t.Fatalf("Expected 'exactly one' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-108: grep with context_lines shows before and after context ---
+func TestFS_E2E108_GrepContextContent(t *testing.T) {
+	env := setupFSTest(t, 9313, 0)
+
+	content := "alpha\nbeta\ngamma\ndelta\nepsilon\n"
+	os.WriteFile(filepath.Join(env.rootDir, "greek.txt"), []byte(content), 0644)
+
+	result := callToolExpectSuccess(t, env.client, "grep", map[string]any{
+		"root": "workspace", "pattern": "gamma", "context_lines": 1,
+	})
+	matches := result["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("Expected 1 match, got %d", len(matches))
+	}
+	m := matches[0].(map[string]any)
+
+	// Check context_before contains "beta"
+	before := m["context_before"].([]any)
+	if len(before) != 1 || before[0].(string) != "beta" {
+		t.Fatalf("Expected context_before=[beta], got %v", before)
+	}
+
+	// Check context_after contains "delta"
+	after := m["context_after"].([]any)
+	if len(after) != 1 || after[0].(string) != "delta" {
+		t.Fatalf("Expected context_after=[delta], got %v", after)
+	}
+}
+
+// --- E2E-109: read_file truncated flag on byte-based read ---
+// The "truncated" flag in byte mode indicates that the actual bytes read were
+// less than the requested limit (i.e., we hit EOF before filling the buffer).
+func TestFS_E2E109_ReadFileByteTruncated(t *testing.T) {
+	env := setupFSTest(t, 9314, 0)
+
+	content := "abcdefghij" // 10 bytes
+	os.WriteFile(filepath.Join(env.rootDir, "trunc.txt"), []byte(content), 0644)
+
+	// Read exactly 5 bytes — all 5 are available, so truncated=false
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "trunc.txt", "offset_bytes": 0, "limit_bytes": 5,
+	})
+	if result["content"].(string) != "abcde" {
+		t.Fatalf("Expected 'abcde', got %q", result["content"])
+	}
+	if result["truncated"] != false {
+		t.Fatal("Expected truncated=false when all requested bytes are available")
+	}
+
+	// Request more bytes than available from offset 8 (only 2 bytes remain)
+	result = callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "trunc.txt", "offset_bytes": 8, "limit_bytes": 10,
+	})
+	if result["content"].(string) != "ij" {
+		t.Fatalf("Expected 'ij', got %q", result["content"])
+	}
+	if result["truncated"] != true {
+		t.Fatal("Expected truncated=true when fewer bytes available than requested")
+	}
+}
+
+// --- E2E-110: read_file line-based truncated flag ---
+func TestFS_E2E110_ReadFileLineTruncated(t *testing.T) {
+	env := setupFSTest(t, 9315, 0)
+
+	content := "line1\nline2\nline3\nline4\nline5\n"
+	os.WriteFile(filepath.Join(env.rootDir, "lines.txt"), []byte(content), 0644)
+
+	// Read 2 lines from 5-line file
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "lines.txt", "offset_lines": 1, "limit_lines": 2,
+	})
+	if result["truncated"] != true {
+		t.Fatal("Expected truncated=true when limit_lines < total lines")
+	}
+	if result["lines_total"].(float64) != 5 {
+		t.Fatalf("Expected lines_total=5, got %v", result["lines_total"])
+	}
+
+	// Read all lines — should NOT be truncated
+	result = callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "lines.txt", "offset_lines": 1, "limit_lines": 10,
+	})
+	if result["truncated"] != false {
+		t.Fatal("Expected truncated=false when all lines returned")
+	}
+}
+
+// --- E2E-111: allowlist enforcement on multiple tools ---
+func TestFS_E2E111_AllowlistMultipleTools(t *testing.T) {
+	env := setupFSTest(t, 9316, 0)
+
+	// The "restricted" root only allows list_folder. Verify multiple tool types are blocked.
+
+	// remove_file should be blocked
+	errMsg := callToolExpectError(t, env.client, "remove_file", map[string]any{
+		"root": "restricted", "path": "test.txt",
+	})
+	if !strings.Contains(errMsg, "not allowed") {
+		t.Fatalf("Expected 'not allowed' for remove_file on restricted, got: %s", errMsg)
+	}
+
+	// grep should be blocked
+	errMsg = callToolExpectError(t, env.client, "grep", map[string]any{
+		"root": "restricted", "pattern": "test",
+	})
+	if !strings.Contains(errMsg, "not allowed") {
+		t.Fatalf("Expected 'not allowed' for grep on restricted, got: %s", errMsg)
+	}
+
+	// stat_file should be blocked
+	errMsg = callToolExpectError(t, env.client, "stat_file", map[string]any{
+		"root": "restricted", "path": "test.txt",
+	})
+	if !strings.Contains(errMsg, "not allowed") {
+		t.Fatalf("Expected 'not allowed' for stat_file on restricted, got: %s", errMsg)
+	}
+
+	// But list_folder should work
+	callToolExpectSuccess(t, env.client, "list_folder", map[string]any{
+		"root": "restricted", "path": ".",
+	})
+}
+
+// --- E2E-112: readonly root allows read-only tools ---
+func TestFS_E2E112_ReadonlyRootReadTools(t *testing.T) {
+	env := setupFSTest(t, 9317, 0)
+
+	// The "readonly" root allows: list_folder, read_file, stat_file, grep, glob
+	// Create a file in the readonly root directory directly
+	readonlyDir := filepath.Join(filepath.Dir(env.rootDir), "readonly")
+	os.WriteFile(filepath.Join(readonlyDir, "readme.txt"), []byte("readonly data\n"), 0644)
+
+	// read_file should work
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "readonly", "path": "readme.txt",
+	})
+	if result["content"].(string) != "readonly data\n" {
+		t.Fatalf("Expected 'readonly data\\n', got %q", result["content"])
+	}
+
+	// stat_file should work
+	callToolExpectSuccess(t, env.client, "stat_file", map[string]any{
+		"root": "readonly", "path": "readme.txt",
+	})
+
+	// grep should work
+	grepResult := callToolExpectSuccess(t, env.client, "grep", map[string]any{
+		"root": "readonly", "pattern": "readonly",
+	})
+	if grepResult["total_matches"].(float64) != 1 {
+		t.Fatalf("Expected 1 grep match, got %v", grepResult["total_matches"])
+	}
+
+	// glob should work
+	globResult := callToolExpectSuccess(t, env.client, "glob", map[string]any{
+		"root": "readonly", "pattern": "*.txt",
+	})
+	if globResult["total_matches"].(float64) != 1 {
+		t.Fatalf("Expected 1 glob match, got %v", globResult["total_matches"])
+	}
+
+	// write_file should be blocked
+	errMsg := callToolExpectError(t, env.client, "write_file", map[string]any{
+		"root": "readonly", "path": "test.txt", "content": "nope",
+	})
+	if !strings.Contains(errMsg, "not allowed") {
+		t.Fatalf("Expected 'not allowed' for write_file on readonly, got: %s", errMsg)
+	}
+
+	// remove_file should be blocked
+	errMsg = callToolExpectError(t, env.client, "remove_file", map[string]any{
+		"root": "readonly", "path": "readme.txt",
+	})
+	if !strings.Contains(errMsg, "not allowed") {
+		t.Fatalf("Expected 'not allowed' for remove_file on readonly, got: %s", errMsg)
+	}
+}
+
+// --- E2E-113: path traversal variants ---
+func TestFS_E2E113_PathTraversalVariants(t *testing.T) {
+	env := setupFSTest(t, 9318, 0)
+
+	// Various path traversal attempts
+	traversals := []string{
+		"../../../etc/passwd",
+		"sub/../../..",
+		"sub/../../../etc/hosts",
+	}
+	for _, path := range traversals {
+		errMsg := callToolExpectError(t, env.client, "read_file", map[string]any{
+			"root": "workspace", "path": path,
+		})
+		if !strings.Contains(errMsg, "outside root") && !strings.Contains(errMsg, "not found") {
+			t.Fatalf("Expected security error for path %q, got: %s", path, errMsg)
+		}
+	}
+}
+
+// --- E2E-114: write_file and read_file with special characters ---
+func TestFS_E2E114_SpecialCharacterContent(t *testing.T) {
+	env := setupFSTest(t, 9319, 0)
+
+	// Content with unicode, newlines, special characters
+	specialContent := "Hello World\n\tTabbed line\nEmoji in content\nJSON: {\"key\": \"value\"}\nPath: /usr/bin\n"
+
+	callToolExpectSuccess(t, env.client, "write_file", map[string]any{
+		"root": "workspace", "path": "special.txt", "content": specialContent,
+	})
+
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "special.txt",
+	})
+	if result["content"].(string) != specialContent {
+		t.Fatalf("Content with special characters mismatch.\nExpected: %q\nGot: %q", specialContent, result["content"])
+	}
+}
+
+// --- E2E-115: move to destination with nested parent creation ---
+func TestFS_E2E115_MoveCreatesParentDirs(t *testing.T) {
+	env := setupFSTest(t, 9320, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "moveme.txt"), []byte("move to nested"), 0644)
+
+	callToolExpectSuccess(t, env.client, "move", map[string]any{
+		"source_root": "workspace", "source_path": "moveme.txt",
+		"dest_root": "workspace", "dest_path": "deep/nested/moveme.txt",
+	})
+
+	// Old path gone
+	callToolExpectError(t, env.client, "stat_file", map[string]any{
+		"root": "workspace", "path": "moveme.txt",
+	})
+
+	// New path has content
+	result := callToolExpectSuccess(t, env.client, "read_file", map[string]any{
+		"root": "workspace", "path": "deep/nested/moveme.txt",
+	})
+	if result["content"].(string) != "move to nested" {
+		t.Fatal("Move to nested directory content mismatch")
+	}
+}
+
+// --- E2E-116: glob type_filter directory ---
+func TestFS_E2E116_GlobTypeFilterDirectory(t *testing.T) {
+	env := setupFSTest(t, 9321, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "file.txt"), []byte("f"), 0644)
+	os.MkdirAll(filepath.Join(env.rootDir, "dir1"), 0755)
+	os.MkdirAll(filepath.Join(env.rootDir, "dir2"), 0755)
+
+	result := callToolExpectSuccess(t, env.client, "glob", map[string]any{
+		"root": "workspace", "pattern": "*", "type_filter": "directory",
+	})
+	totalMatches := int(result["total_matches"].(float64))
+	if totalMatches != 2 {
+		t.Fatalf("Expected 2 directory matches, got %d", totalMatches)
+	}
+	matches := result["matches"].([]any)
+	for _, m := range matches {
+		if m.(map[string]any)["type"].(string) != "directory" {
+			t.Fatal("Expected only directories")
+		}
+	}
+}
+
+// --- E2E-117: stat_file returns correct size for file ---
+func TestFS_E2E117_StatFileSize(t *testing.T) {
+	env := setupFSTest(t, 9322, 0)
+
+	content := "exactly 26 bytes of text.\n"
+	os.WriteFile(filepath.Join(env.rootDir, "sized.txt"), []byte(content), 0644)
+
+	result := callToolExpectSuccess(t, env.client, "stat_file", map[string]any{
+		"root": "workspace", "path": "sized.txt",
+	})
+	size := int64(result["size"].(float64))
+	if size != int64(len(content)) {
+		t.Fatalf("Expected size=%d, got %d", len(content), size)
+	}
+	if result["modified_at"] == nil || result["modified_at"].(string) == "" {
+		t.Fatal("Expected non-empty modified_at")
+	}
+}
+
+// --- E2E-118: patch_file with empty/invalid patch format ---
+func TestFS_E2E118_PatchFileInvalidFormat(t *testing.T) {
+	env := setupFSTest(t, 9323, 0)
+
+	os.WriteFile(filepath.Join(env.rootDir, "file.txt"), []byte("data\n"), 0644)
+
+	// Patch with no hunks
+	errMsg := callToolExpectError(t, env.client, "patch_file", map[string]any{
+		"root": "workspace", "path": "file.txt", "patch": "this is not a valid patch",
+	})
+	if !strings.Contains(errMsg, "no hunks") {
+		t.Fatalf("Expected 'no hunks' error, got: %s", errMsg)
+	}
+}
+
+// --- E2E-119: copy preserves file content integrity across roots ---
+func TestFS_E2E119_CopyIntegrity(t *testing.T) {
+	env := setupFSTest(t, 9324, 0)
+
+	// Write a file with known content, copy cross-root, verify hash matches
+	content := "integrity check content with various data: 1234567890!@#$%^&*()\n"
+	os.WriteFile(filepath.Join(env.sourceDir, "integrity.txt"), []byte(content), 0644)
+
+	// Hash the source
+	srcHash := callToolExpectSuccess(t, env.client, "hash_file", map[string]any{
+		"root": "source", "path": "integrity.txt", "algorithm": "sha256",
+	})
+
+	// Copy
+	callToolExpectSuccess(t, env.client, "copy", map[string]any{
+		"source_root": "source", "source_path": "integrity.txt",
+		"dest_root": "dest", "dest_path": "integrity.txt",
+	})
+
+	// Hash the dest
+	dstHash := callToolExpectSuccess(t, env.client, "hash_file", map[string]any{
+		"root": "dest", "path": "integrity.txt", "algorithm": "sha256",
+	})
+
+	if srcHash["hash"].(string) != dstHash["hash"].(string) {
+		t.Fatalf("Hash mismatch after copy: src=%s, dst=%s", srcHash["hash"], dstHash["hash"])
+	}
+}
