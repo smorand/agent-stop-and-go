@@ -37,10 +37,11 @@ export ANTHROPIC_API_KEY=your-anthropic-api-key
 make build
 ```
 
-This builds all three binaries for the current platform:
+This builds all four binaries for the current platform:
 
 - `bin/agent-{os}-{arch}` -- Agent API server
 - `bin/mcp-resources-{os}-{arch}` -- MCP resource server
+- `bin/mcp-filesystem-{os}-{arch}` -- MCP filesystem server
 - `bin/web-{os}-{arch}` -- Web chat frontend
 
 ### Step 3: Run the Agent

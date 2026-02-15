@@ -26,6 +26,7 @@ This enables building production-ready agent pipelines where humans remain in co
 | **Session Tracing** | 8-char hex session IDs enable cross-agent log correlation |
 | **Conversation Persistence** | All conversations are saved as JSON files and can be resumed |
 | **Web Chat UI** | Browser-based frontend for interacting with agents |
+| **MCP Filesystem Server** | Sandboxed filesystem operations with chroot-like security, per-root allowlists, diff patching, grep, glob |
 | **Docker Support** | Single-agent and multi-agent Docker Compose deployments |
 
 ## Tech Stack
@@ -105,12 +106,14 @@ agent-stop-and-go/
 ├── cmd/
 │   ├── agent/main.go              # Agent API entry point
 │   ├── web/main.go                # Web chat frontend entry point
-│   └── mcp-resources/main.go      # MCP resource server (SQLite)
+│   ├── mcp-resources/main.go      # MCP resource server (SQLite)
+│   └── mcp-filesystem/main.go     # MCP filesystem server (sandboxed)
 ├── internal/
 │   ├── api/                       # HTTP handlers, routes, A2A server, docs
 │   ├── agent/                     # Core agent logic, orchestration engine
 │   ├── llm/                       # Multi-provider LLM clients (Gemini, Claude)
 │   ├── mcp/                       # MCP client (multi-server via CompositeClient, HTTP + stdio)
+│   ├── filesystem/                # MCP filesystem server (sandboxed file operations)
 │   ├── a2a/                       # A2A JSON-RPC client (HTTPS)
 │   ├── auth/                      # Bearer token and session ID propagation
 │   ├── config/                    # YAML configuration loader
@@ -121,6 +124,7 @@ agent-stop-and-go/
 │   ├── agent-a.yaml               # Docker Compose: orchestrator
 │   ├── agent-b.yaml               # Docker Compose: resource agent
 │   ├── mcp-resources.yaml         # MCP resources server config (local dev)
+│   ├── mcp-filesystem.yaml        # MCP filesystem server config (local dev)
 │   ├── mcp-resources-compose.yaml # MCP resources server config (Docker Compose)
 │   ├── web.yaml                   # Web frontend config (local dev)
 │   └── web-compose.yaml           # Web frontend config (Docker Compose)
@@ -132,7 +136,8 @@ agent-stop-and-go/
 ├── Dockerfile                     # Multi-stage Docker build
 ├── docker-compose.yaml            # Multi-agent deployment
 ├── e2e_test.go                    # Single-agent E2E tests
-└── e2e_orchestration_test.go      # Multi-agent orchestration E2E tests
+├── e2e_orchestration_test.go      # Multi-agent orchestration E2E tests
+└── e2e_filesystem_test.go         # MCP filesystem server E2E tests
 ```
 
 ## Related Documentation

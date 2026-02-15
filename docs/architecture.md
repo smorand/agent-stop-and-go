@@ -68,6 +68,7 @@ graph TB
 | `agent` | `internal/agent/` | Core agent logic: LLM interaction, MCP tool calls, A2A delegation, orchestration engine with sequential/parallel/loop execution |
 | `llm` | `internal/llm/` | Multi-provider LLM interface. `GeminiClient` calls the Google Generative Language API. `ClaudeClient` calls the Anthropic Messages API. Both use a 60-second HTTP timeout. |
 | `mcp` | `internal/mcp/` | MCP client with multi-server support. `CompositeClient` aggregates tools from multiple MCP servers (HTTP or stdio) and routes `CallTool` to the correct sub-client. Handles `initialize`, `tools/list`, and `tools/call`. |
+| `filesystem` | `internal/filesystem/` | MCP filesystem server implementation. Provides 15 sandboxed filesystem tools with chroot-like security (symlink-aware path validation), per-root tool allowlists, unified diff patching, regex content search (grep), and glob file search. |
 | `a2a` | `internal/a2a/` | A2A client: JSON-RPC 2.0 over HTTPS to remote agents. Supports `message/send`, `tasks/get`, and `ContinueTask` (approval forwarding). |
 | `auth` | `internal/auth/` | Context-based propagation of Bearer tokens and session IDs. Provides `WithBearerToken()`, `BearerToken()`, `WithSessionID()`, `SessionID()`, and `GenerateSessionID()`. |
 | `config` | `internal/config/` | YAML config loader. Parses agent configuration including MCP, LLM, A2A, and orchestration tree settings. Applies defaults for missing fields. |
