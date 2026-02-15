@@ -1356,8 +1356,10 @@ func copyFile(src, dst string) (int64, error) {
 	}
 
 	// Preserve permissions
-	if info, err := os.Stat(src); err == nil {
-		os.Chmod(dst, info.Mode())
+	if info, sErr := os.Stat(src); sErr == nil {
+		if chErr := os.Chmod(dst, info.Mode()); chErr != nil {
+			return 0, fmt.Errorf("chmod %s: %w", dst, chErr)
+		}
 	}
 
 	return n, nil
