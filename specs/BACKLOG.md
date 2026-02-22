@@ -124,26 +124,35 @@
 - Event-driven architecture scales to high file volumes
 - Reuses the multi-channel client front-ends (Slack, Teams, Gmail, Google Chat) for user interaction
 
-### Multi-Provider LLM Support (Ollama, OpenAI, Mistral)
+### Multi-Provider LLM Support (OpenAI, Mistral, Ollama, OpenRouter)
 
 **Added:** 2026-02-22
 
-**Description:** Extend the LLM provider system beyond the current Gemini and Claude support to include Ollama (local models), OpenAI, and Mistral API. The model routing convention (`claude-*` → Anthropic, others → Gemini) would be extended with additional prefixes or configuration to route to the correct provider. Starting/managing the Ollama server itself is out of scope — only the client interface to communicate with a running Ollama instance is in scope.
+**Description:** Extend the LLM provider system from the current 2 providers (Gemini + Claude) to 6 total by adding OpenAI, Mistral, Ollama, and OpenRouter. The key architectural insight is that OpenAI, Mistral, Ollama, and OpenRouter all use the OpenAI-compatible Chat Completions format, so they can share a single `OpenAICompatibleClient` implementation. Each provider only differs in base URL, API key environment variable, and optional custom headers. Gemini and Claude keep their existing custom clients (`GeminiClient` and `ClaudeClient`). Starting/managing the Ollama server itself is out of scope — only the client interface to communicate with a running Ollama instance is in scope.
 
-**Current State:** The platform supports two LLM providers: Gemini (default) and Claude (triggered by `claude-*` model prefix). The `llm.NewClient(model)` factory in `internal/llm/client.go` selects the provider based on the model name. Both providers implement the `llm.Client` interface with `GenerateWithTools()`.
+**Current State:** The platform supports two LLM providers: Gemini (default, via `generativelanguage.googleapis.com`, env var `GEMINI_API_KEY`) and Claude (triggered by `claude-*` model prefix, via `api.anthropic.com`, env var `ANTHROPIC_API_KEY`). The `llm.NewClient(model)` factory in `internal/llm/client.go` selects the provider based on the model name prefix. Both providers implement the `llm.Client` interface with `GenerateWithTools()` and handle `CoerceToolCallArgs` for fixing LLM type mismatches on tool arguments. Both clients convert MCP tool schemas to provider-specific formats.
+
+**Architecture — 3 Client Implementations:**
+- `GeminiClient` (existing): custom request format for Gemini generativelanguage API
+- `ClaudeClient` (existing): custom request format for Anthropic Messages API
+- `OpenAICompatibleClient` (NEW): shared implementation for all OpenAI-compatible providers, parameterized by base URL, API key env var, and optional headers. Covers OpenAI, Mistral, Ollama, and OpenRouter with minimal per-provider code.
 
 **Key Requirements:**
-- Ollama client: HTTP API compatible with the Ollama REST interface (`/api/chat` with tool support), configurable endpoint URL (default `http://localhost:11434`). Ollama server lifecycle management is out of scope.
-- OpenAI client: OpenAI Chat Completions API with function calling support, compatible with `gpt-4o`, `gpt-4-turbo`, etc. Requires `OPENAI_API_KEY` environment variable.
-- Mistral client: Mistral Chat API with tool use support, compatible with `mistral-large`, `mistral-medium`, etc. Requires `MISTRAL_API_KEY` environment variable.
-- Model routing: extend the `llm.NewClient()` factory with clear prefix conventions (e.g., `ollama-*` → Ollama, `gpt-*` or `openai-*` → OpenAI, `mistral-*` → Mistral)
-- All providers must implement the existing `llm.Client` interface (`GenerateWithTools`) and handle tool call argument coercion (`CoerceToolCallArgs`)
+- OpenAI client: native Chat Completions API (`api.openai.com`), function calling support, compatible with `gpt-4o`, `gpt-4-turbo`, `o1`, etc. Requires `OPENAI_API_KEY` environment variable.
+- Mistral client: native API (`api.mistral.ai`), OpenAI-compatible Chat Completions format with tool use support, compatible with `mistral-large`, `mistral-medium`, etc. Requires `MISTRAL_API_KEY` environment variable.
+- Ollama client: local inference via OpenAI-compatible API (`localhost:11434` by default), configurable endpoint URL. No API key needed. Ollama server lifecycle management is out of scope.
+- OpenRouter client: unified API gateway (`openrouter.ai/api`), OpenAI-compatible format, supports hundreds of models from various providers. Requires `OPENROUTER_API_KEY` environment variable. Requires `HTTP-Referer` and `X-Title` headers per OpenRouter API spec. Model names pass through to OpenRouter after prefix removal (e.g., `openrouter-anthropic/claude-3-opus` routes to OpenRouter with model `anthropic/claude-3-opus`).
+- Model routing: extend `llm.NewClient()` with prefix conventions: `claude-*` → ClaudeClient, `gpt-*` or `openai-*` → OpenAI, `mistral-*` → Mistral, `ollama-*` → Ollama, `openrouter-*` → OpenRouter, default → GeminiClient
+- All providers must implement the existing `llm.Client` interface (`GenerateWithTools`), handle tool call argument coercion (`CoerceToolCallArgs`), and convert MCP tool schemas to provider-specific formats
 
 **Potential Benefits:**
+- Single `OpenAICompatibleClient` covers 4 new providers with minimal per-provider code
 - Run local models via Ollama for development, testing, or air-gapped environments
 - Access to OpenAI's latest models (GPT-4o, o1, etc.)
 - Access to Mistral models for cost-effective European-hosted inference
-- Mix and match models in orchestrated pipelines (e.g., cheap local model for analysis, powerful cloud model for decisions)
+- Access to hundreds of models via OpenRouter (including providers not directly supported) through a single API gateway
+- Cost optimization by mixing providers in orchestrated pipelines (e.g., cheap local Ollama model for analysis, powerful cloud model for decisions)
+- Mix and match providers per node in agent trees — each `llm` node can use a different provider
 
 ### OAuth2 Authentication in MCP with A2A Protocol Forwarding
 
