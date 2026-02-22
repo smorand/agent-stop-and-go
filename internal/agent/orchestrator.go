@@ -363,7 +363,7 @@ func (a *Agent) executeLLMNode(ctx context.Context, node *config.AgentNode, stat
 
 	// Execute non-destructive MCP tool (CompositeClient handles serialization)
 	conv.AddToolCall(toolName, toolArgs)
-	result, err := a.mcpClient.CallTool(toolName, toolArgs)
+	result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 	if err != nil {
 		errorMsg := fmt.Sprintf("[%s] Tool execution failed: %v", node.Name, err)
 		conv.AddToolResult(toolName, errorMsg, true)

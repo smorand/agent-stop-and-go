@@ -288,7 +288,7 @@ func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Con
 
 		// Non-destructive MCP tool → execute, continue loop
 		conv.AddToolCall(toolName, toolArgs)
-		result, err := a.mcpClient.CallTool(toolName, toolArgs)
+		result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 		if err != nil {
 			conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
 			continue
@@ -406,7 +406,7 @@ func (a *Agent) formatApprovalDescription(toolName string, args map[string]any) 
 func (a *Agent) executeToolAndRespond(ctx context.Context, conv *conversation.Conversation, toolName string, args map[string]any) (*ProcessResult, error) {
 	conv.AddToolCall(toolName, args)
 
-	result, err := a.mcpClient.CallTool(toolName, args)
+	result, err := a.mcpClient.CallTool(ctx, toolName, args)
 	if err != nil {
 		errorMsg := fmt.Sprintf("Tool execution failed: %v", err)
 		conv.AddToolResult(toolName, errorMsg, true)
@@ -650,7 +650,7 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 				conv.AddToolResult(toolName, resultText, task.Status.State == "failed")
 			}
 		} else {
-			result, err := a.mcpClient.CallTool(toolName, toolArgs)
+			result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 			if err != nil {
 				conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
 			} else {
@@ -686,7 +686,7 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 		toolResult = extractTaskText(task)
 		conv.AddToolResult(toolName, toolResult, task.Status.State == "failed")
 	} else {
-		result, err := a.mcpClient.CallTool(toolName, toolArgs)
+		result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("tool execution failed: %w", err)
 		}

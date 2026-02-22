@@ -127,8 +127,9 @@ func (c *HTTPClient) GetTool(name string) *Tool {
 }
 
 // CallTool executes a tool with the given arguments.
-func (c *HTTPClient) CallTool(name string, args map[string]any) (*CallToolResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), httpClientTimeout)
+// The caller's context is used as a parent so Bearer tokens are available to the transport.
+func (c *HTTPClient) CallTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, httpClientTimeout)
 	defer cancel()
 
 	req := mcpgo.CallToolRequest{}
