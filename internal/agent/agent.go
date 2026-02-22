@@ -270,6 +270,17 @@ func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Con
 				return &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
 			}
 
+			// Sub-agent needs auth → propagate upstream
+			if task.Status.State == "auth-required" {
+				response := fmt.Sprintf("Authentication required by A2A agent %s.", client.Name())
+				if task.Status.Message != nil {
+					response = *task.Status.Message
+				}
+				conv.AddMessage(conversation.RoleAssistant, response)
+				_ = a.storage.SaveConversation(conv)
+				return &ProcessResult{Response: response, AuthRequired: true}, nil
+			}
+
 			resultText := extractTaskText(task)
 			conv.AddToolResult(toolName, resultText, task.Status.State == "failed")
 			continue
@@ -512,6 +523,19 @@ func (a *Agent) executeA2AAndRespond(ctx context.Context, conv *conversation.Con
 		}, nil
 	}
 
+	// Check if the sub-agent returned "auth-required"
+	if task.Status.State == "auth-required" {
+		response := fmt.Sprintf("Authentication required by A2A agent %s.", client.Name())
+		if task.Status.Message != nil {
+			response = *task.Status.Message
+		}
+		conv.AddMessage(conversation.RoleAssistant, response)
+		if err := a.storage.SaveConversation(conv); err != nil {
+			return nil, err
+		}
+		return &ProcessResult{Response: response, AuthRequired: true}, nil
+	}
+
 	// Extract result text from task artifact
 	var resultText string
 	if task.Artifact != nil {
@@ -617,6 +641,17 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 				return nil, nil, err
 			}
 			return conv, &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
+		}
+
+		// Remote agent needs auth → propagate upstream
+		if task.Status.State == "auth-required" {
+			response := fmt.Sprintf("Authentication required by A2A agent %s.", client.Name())
+			if task.Status.Message != nil {
+				response = *task.Status.Message
+			}
+			conv.AddMessage(conversation.RoleAssistant, response)
+			_ = a.storage.SaveConversation(conv)
+			return conv, &ProcessResult{Response: response, AuthRequired: true}, nil
 		}
 
 		resultText := extractTaskText(task)

@@ -341,6 +341,16 @@ func (a *Agent) executeLLMNode(ctx context.Context, node *config.AgentNode, stat
 			return result, nil
 		}
 
+		// Sub-agent returned "auth-required" — propagate upstream
+		if task.Status.State == "auth-required" {
+			response := fmt.Sprintf("[%s] Authentication required by A2A agent %s.", node.Name, agentName)
+			if task.Status.Message != nil {
+				response = *task.Status.Message
+			}
+			conv.AddMessage(conversation.RoleAssistant, response)
+			return &NodeResult{Response: response, AuthRequired: true}, nil
+		}
+
 		resultText := extractTaskText(task)
 		conv.AddToolResult(toolName, resultText, task.Status.State == "failed")
 		if node.OutputKey != "" {
@@ -444,6 +454,16 @@ func (a *Agent) executeA2ANode(ctx context.Context, node *config.AgentNode, stat
 			return nil, err
 		}
 		return result, nil
+	}
+
+	// Sub-agent returned "auth-required" — propagate upstream
+	if task.Status.State == "auth-required" {
+		response := fmt.Sprintf("[%s] Authentication required by A2A agent %s.", node.Name, node.Name)
+		if task.Status.Message != nil {
+			response = *task.Status.Message
+		}
+		conv.AddMessage(conversation.RoleAssistant, response)
+		return &NodeResult{Response: response, AuthRequired: true}, nil
 	}
 
 	resultText := extractTaskText(task)
