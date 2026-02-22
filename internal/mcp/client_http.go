@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
+
+	"agent-stop-and-go/internal/auth"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -60,9 +63,17 @@ func (c *HTTPClient) Start() error {
 	return fmt.Errorf("failed to connect to MCP server after %d attempts: %w", connectMaxRetries, lastErr)
 }
 
+// bearerHeaderFunc extracts the Bearer token from context and returns it as an Authorization header.
+func bearerHeaderFunc(ctx context.Context) map[string]string {
+	if token := auth.BearerToken(ctx); token != "" {
+		return map[string]string{"Authorization": "Bearer " + token}
+	}
+	return nil
+}
+
 // connect attempts a single connection to the MCP server.
 func (c *HTTPClient) connect() error {
-	t, err := transport.NewStreamableHTTP(c.url)
+	t, err := transport.NewStreamableHTTP(c.url, transport.WithHTTPHeaderFunc(bearerHeaderFunc))
 	if err != nil {
 		return fmt.Errorf("transport error: %w", err)
 	}
@@ -128,6 +139,7 @@ func (c *HTTPClient) GetTool(name string) *Tool {
 
 // CallTool executes a tool with the given arguments.
 // The caller's context is used as a parent so Bearer tokens are available to the transport.
+// Returns AuthRequiredError if the MCP server responds with HTTP 401.
 func (c *HTTPClient) CallTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, httpClientTimeout)
 	defer cancel()
@@ -138,10 +150,19 @@ func (c *HTTPClient) CallTool(ctx context.Context, name string, args map[string]
 
 	result, err := c.client.CallTool(ctx, req)
 	if err != nil {
+		if isHTTP401Error(err) {
+			log.Printf("WARN: MCP server %s returned HTTP 401 for tool %s", c.url, name)
+			return nil, &AuthRequiredError{Server: c.url, Tool: name}
+		}
 		return nil, fmt.Errorf("MCP tool call failed: %w", err)
 	}
 
 	return adaptCallToolResult(result), nil
+}
+
+// isHTTP401Error checks if an error from mcp-go indicates an HTTP 401 Unauthorized response.
+func isHTTP401Error(err error) bool {
+	return strings.Contains(err.Error(), "status 401")
 }
 
 // loadToolsFrom fetches tools from the given client and converts them.
