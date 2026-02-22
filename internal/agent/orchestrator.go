@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -88,6 +89,7 @@ type NodeResult struct {
 	WaitingApproval bool
 	Approval        *conversation.PendingApproval
 	ExitLoop        bool
+	AuthRequired    bool
 }
 
 const defaultLoopMaxIterations = 10
@@ -140,7 +142,7 @@ func (a *Agent) executeSequential(ctx context.Context, node *config.AgentNode, s
 		if err != nil {
 			return nil, err
 		}
-		if result.WaitingApproval || result.ExitLoop {
+		if result.WaitingApproval || result.ExitLoop || result.AuthRequired {
 			return result, nil
 		}
 		startIndex++
@@ -156,7 +158,7 @@ func (a *Agent) executeSequential(ctx context.Context, node *config.AgentNode, s
 			return nil, err
 		}
 		lastResult = result
-		if result.WaitingApproval || result.ExitLoop {
+		if result.WaitingApproval || result.ExitLoop || result.AuthRequired {
 			return result, nil
 		}
 	}
@@ -365,6 +367,12 @@ func (a *Agent) executeLLMNode(ctx context.Context, node *config.AgentNode, stat
 	conv.AddToolCall(toolName, toolArgs)
 	result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 	if err != nil {
+		var authErr *mcp.AuthRequiredError
+		if errors.As(err, &authErr) {
+			response := fmt.Sprintf("[%s] Authentication required to access the %s server.", node.Name, tool.Server)
+			conv.AddMessage(conversation.RoleAssistant, response)
+			return &NodeResult{Response: response, AuthRequired: true}, nil
+		}
 		errorMsg := fmt.Sprintf("[%s] Tool execution failed: %v", node.Name, err)
 		conv.AddToolResult(toolName, errorMsg, true)
 		return &NodeResult{Response: errorMsg}, nil

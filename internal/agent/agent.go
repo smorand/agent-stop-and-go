@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -119,6 +120,13 @@ type ProcessResult struct {
 	Response        string                        `json:"response"`
 	WaitingApproval bool                          `json:"waiting_approval"`
 	Approval        *conversation.PendingApproval `json:"approval,omitempty"`
+	AuthRequired    bool                          `json:"auth_required"`
+}
+
+// isAuthRequiredError checks if an error is an MCP AuthRequiredError.
+func isAuthRequiredError(err error) bool {
+	var authErr *mcp.AuthRequiredError
+	return errors.As(err, &authErr)
 }
 
 // isSimpleAgent returns true if the agent is a single LLM node (backward compat mode).
@@ -184,6 +192,7 @@ func (a *Agent) processOrchestrated(ctx context.Context, conv *conversation.Conv
 		Response:        result.Response,
 		WaitingApproval: result.WaitingApproval,
 		Approval:        result.Approval,
+		AuthRequired:    result.AuthRequired,
 	}, nil
 }
 
@@ -290,6 +299,12 @@ func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Con
 		conv.AddToolCall(toolName, toolArgs)
 		result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 		if err != nil {
+			if isAuthRequiredError(err) {
+				response := fmt.Sprintf("Authentication required to access the %s server.", tool.Server)
+				conv.AddMessage(conversation.RoleAssistant, response)
+				_ = a.storage.SaveConversation(conv)
+				return &ProcessResult{Response: response, AuthRequired: true}, nil
+			}
 			conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
 			continue
 		}
@@ -408,6 +423,19 @@ func (a *Agent) executeToolAndRespond(ctx context.Context, conv *conversation.Co
 
 	result, err := a.mcpClient.CallTool(ctx, toolName, args)
 	if err != nil {
+		if isAuthRequiredError(err) {
+			tool := a.mcpClient.GetTool(toolName)
+			serverName := toolName
+			if tool != nil {
+				serverName = tool.Server
+			}
+			response := fmt.Sprintf("Authentication required to access the %s server.", serverName)
+			conv.AddMessage(conversation.RoleAssistant, response)
+			if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
+				return nil, saveErr
+			}
+			return &ProcessResult{Response: response, AuthRequired: true}, nil
+		}
 		errorMsg := fmt.Sprintf("Tool execution failed: %v", err)
 		conv.AddToolResult(toolName, errorMsg, true)
 		conv.AddMessage(conversation.RoleAssistant, errorMsg)
@@ -622,6 +650,7 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 				Response:        nodeResult.Response,
 				WaitingApproval: nodeResult.WaitingApproval,
 				Approval:        nodeResult.Approval,
+				AuthRequired:    nodeResult.AuthRequired,
 			}, nil
 		}
 
@@ -652,6 +681,17 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 		} else {
 			result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 			if err != nil {
+				if isAuthRequiredError(err) {
+					tool := a.mcpClient.GetTool(toolName)
+					serverName := toolName
+					if tool != nil {
+						serverName = tool.Server
+					}
+					response := fmt.Sprintf("Authentication required to access the %s server.", serverName)
+					conv.AddMessage(conversation.RoleAssistant, response)
+					_ = a.storage.SaveConversation(conv)
+					return conv, &ProcessResult{Response: response, AuthRequired: true}, nil
+				}
 				conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
 			} else {
 				var resultText string
@@ -688,6 +728,17 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 	} else {
 		result, err := a.mcpClient.CallTool(ctx, toolName, toolArgs)
 		if err != nil {
+			if isAuthRequiredError(err) {
+				tool := a.mcpClient.GetTool(toolName)
+				serverName := toolName
+				if tool != nil {
+					serverName = tool.Server
+				}
+				response := fmt.Sprintf("Authentication required to access the %s server.", serverName)
+				conv.AddMessage(conversation.RoleAssistant, response)
+				_ = a.storage.SaveConversation(conv)
+				return conv, &ProcessResult{Response: response, AuthRequired: true}, nil
+			}
 			return nil, nil, fmt.Errorf("tool execution failed: %w", err)
 		}
 		if len(result.Content) > 0 {
@@ -719,6 +770,7 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 		Response:        nodeResult.Response,
 		WaitingApproval: nodeResult.WaitingApproval,
 		Approval:        nodeResult.Approval,
+		AuthRequired:    nodeResult.AuthRequired,
 	}, nil
 }
 
