@@ -23,15 +23,15 @@ func TestLoad(t *testing.T) {
 			wantName:  "agent",
 			wantHost:  "0.0.0.0",
 			wantPort:  8080,
-			wantModel: "gemini-2.5-flash",
+			wantModel: "google:gemini-2.5-flash",
 		},
 		{
 			name:      "custom values override defaults",
-			yaml:      "name: myagent\nhost: localhost\nport: 9090\nllm:\n  model: claude-sonnet-4-5-20250929\nmcp_servers:\n  - name: default\n    command: ./bin/mcp\n",
+			yaml:      "name: myagent\nhost: localhost\nport: 9090\nllm:\n  model: anthropic:claude-sonnet-4-5-20250929\nmcp_servers:\n  - name: default\n    command: ./bin/mcp\n",
 			wantName:  "myagent",
 			wantHost:  "localhost",
 			wantPort:  9090,
-			wantModel: "claude-sonnet-4-5-20250929",
+			wantModel: "anthropic:claude-sonnet-4-5-20250929",
 		},
 		{
 			name:    "invalid yaml returns error",

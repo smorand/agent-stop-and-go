@@ -6,7 +6,7 @@ port: 9091
 data_dir: ./data/e2e_test_par
 
 llm:
-  model: gemini-3-flash-preview
+  model: google:gemini-3-flash-preview
 
 mcp_servers:
   - name: resources
@@ -21,21 +21,21 @@ agent:
       agents:
         - name: list-all
           type: llm
-          model: gemini-3-flash-preview
+          model: google:gemini-3-flash-preview
           output_key: all_resources
           prompt: |
             List all resources by calling the resources_list tool.
             Output the raw result from the tool.
         - name: count-analysis
           type: llm
-          model: gemini-3-flash-preview
+          model: google:gemini-3-flash-preview
           output_key: count_info
           prompt: |
             Call resources_list to list resources. Count how many there are.
             Output a single line: "Total: N resources" where N is the count.
     - name: summarizer
       type: llm
-      model: gemini-3-flash-preview
+      model: google:gemini-3-flash-preview
       prompt: |
         Summarize the following data in one paragraph:
 

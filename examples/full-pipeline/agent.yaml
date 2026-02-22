@@ -6,7 +6,7 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 mcp:
   command: ./bin/mcp-resources
@@ -22,7 +22,7 @@ agent:
     # Step 1: Analyze the user request
     - name: intent-analyzer
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: intent
       prompt: |
         You are an intent classifier. Analyze the user's message and classify it into
@@ -40,7 +40,7 @@ agent:
       agents:
         - name: current-state
           type: llm
-          model: gemini-2.5-flash
+          model: google:gemini-2.5-flash
           output_key: current_resources
           prompt: |
             List all current resources using the resources_list tool.
@@ -48,7 +48,7 @@ agent:
 
         - name: request-enricher
           type: llm
-          model: gemini-2.5-flash
+          model: google:gemini-2.5-flash
           output_key: enriched_request
           prompt: |
             Given this intent analysis: {intent}
@@ -64,7 +64,7 @@ agent:
     # Step 3: Execute based on gathered context
     - name: executor
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: execution_result
       prompt: |
         You are the execution agent. Based on the following context, perform the appropriate action.
@@ -83,7 +83,7 @@ agent:
     # Step 4: Generate final response
     - name: response-formatter
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       prompt: |
         You are a response formatter. Based on all the work done by the pipeline,
         create a clear, user-friendly response.

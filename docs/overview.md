@@ -17,7 +17,7 @@ This enables building production-ready agent pipelines where humans remain in co
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-LLM Support** | 6 providers (Gemini, Claude, OpenAI, Mistral, Ollama, OpenRouter) with prefix-based routing |
+| **Multi-LLM Support** | 6 providers (Gemini, Claude, OpenAI, Mistral, Ollama, OpenRouter) with `provider:model` routing |
 | **MCP Tool Execution** | Agents call external tools via MCP Streamable HTTP (primary) or stdio (legacy), with multi-server aggregation |
 | **A2A Protocol** | Agents delegate tasks to other agents via JSON-RPC 2.0 over HTTPS |
 | **Approval Workflow** | Destructive operations require explicit human approval before execution |
@@ -61,11 +61,11 @@ git clone https://github.com/smorand/agent-stop-and-go.git
 cd agent-stop-and-go
 
 # 2. Set your LLM API key (one or more depending on your config)
-export GEMINI_API_KEY=your-api-key         # For Gemini models (default)
-# export ANTHROPIC_API_KEY=your-api-key    # For claude-* models
-# export OPENAI_API_KEY=your-api-key       # For openai-* models
-# export MISTRAL_API_KEY=your-api-key      # For mistral-* models
-# export OPENROUTER_API_KEY=your-api-key   # For openrouter-* models
+export GEMINI_API_KEY=your-api-key         # For google:* models
+# export ANTHROPIC_API_KEY=your-api-key    # For anthropic:* models
+# export OPENAI_API_KEY=your-api-key       # For openai:* models
+# export MISTRAL_API_KEY=your-api-key      # For mistral:* models
+# export OPENROUTER_API_KEY=your-api-key   # For openrouter:* models
 # Ollama: no API key needed (local inference)
 
 # 3. Build all binaries

@@ -77,7 +77,7 @@ func TestOpenAITextResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "OPENAI_API_KEY", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "OPENAI_API_KEY"}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	t.Setenv("OPENAI_API_KEY", "test-key-123")
@@ -139,8 +139,8 @@ func TestMistralTextResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "mistral", baseURL: srv.URL, apiKeyEnv: "MISTRAL_API_KEY", prefix: "mistral-"}
-	client := NewOpenAICompatibleClient(cfg, "large-latest")
+	cfg := providerConfig{name: "mistral", baseURL: srv.URL, apiKeyEnv: "MISTRAL_API_KEY"}
+	client := NewOpenAICompatibleClient(cfg, "mistral-large-latest")
 
 	t.Setenv("MISTRAL_API_KEY", "mistral-test-key")
 
@@ -157,8 +157,8 @@ func TestMistralTextResponse(t *testing.T) {
 
 	var reqBody openaiRequest
 	json.Unmarshal(capturedBody, &reqBody)
-	if reqBody.Model != "large-latest" {
-		t.Errorf("got model %q, want %q", reqBody.Model, "large-latest")
+	if reqBody.Model != "mistral-large-latest" {
+		t.Errorf("got model %q, want %q", reqBody.Model, "mistral-large-latest")
 	}
 }
 
@@ -174,7 +174,7 @@ func TestOllamaTextResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "ollama", baseURL: srv.URL, apiKeyEnv: "", prefix: "ollama-"}
+	cfg := providerConfig{name: "ollama", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "llama3")
 
 	resp, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "Hello"}}, nil)
@@ -204,7 +204,7 @@ func TestOpenRouterTextResponse(t *testing.T) {
 	defer srv.Close()
 
 	cfg := providerConfig{
-		name: "openrouter", baseURL: srv.URL, apiKeyEnv: "OPENROUTER_API_KEY", prefix: "openrouter-",
+		name: "openrouter", baseURL: srv.URL, apiKeyEnv: "OPENROUTER_API_KEY",
 		headers: map[string]string{"HTTP-Referer": "https://github.com/agentic-platform", "X-Title": "Agent Stop and Go"},
 	}
 	client := NewOpenAICompatibleClient(cfg, "anthropic/claude-3-opus")
@@ -247,7 +247,7 @@ func TestToolSchemaConversion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 	tools := testTools()
 
@@ -311,7 +311,7 @@ func TestToolCallResponseParsing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	resp, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "add test"}}, testTools())
@@ -344,7 +344,7 @@ func TestCoerceToolCallArgsWithOpenAI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	resp, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "add"}}, testTools())
@@ -360,9 +360,9 @@ func TestCoerceToolCallArgsWithOpenAI(t *testing.T) {
 	}
 }
 
-// --- E2E-008: NewClient Prefix Routing for All Providers ---
+// --- E2E-008: NewClient Provider Routing for All Providers ---
 
-func TestNewClientPrefixRouting(t *testing.T) {
+func TestNewClientProviderRouting(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "fake")
 	t.Setenv("ANTHROPIC_API_KEY", "fake")
 
@@ -370,12 +370,12 @@ func TestNewClientPrefixRouting(t *testing.T) {
 		model    string
 		wantType string
 	}{
-		{"openai-gpt-4o", "*llm.OpenAICompatibleClient"},
-		{"mistral-large-latest", "*llm.OpenAICompatibleClient"},
-		{"ollama-llama3", "*llm.OpenAICompatibleClient"},
-		{"openrouter-anthropic/claude-3-opus", "*llm.OpenAICompatibleClient"},
-		{"claude-sonnet-4-20250514", "*llm.ClaudeClient"},
-		{"gemini-2.5-flash", "*llm.GeminiClient"},
+		{"openai:gpt-4o", "*llm.OpenAICompatibleClient"},
+		{"mistral:mistral-large-latest", "*llm.OpenAICompatibleClient"},
+		{"ollama:llama3", "*llm.OpenAICompatibleClient"},
+		{"openrouter:anthropic/claude-3-opus", "*llm.OpenAICompatibleClient"},
+		{"anthropic:claude-sonnet-4-20250514", "*llm.ClaudeClient"},
+		{"google:gemini-2.5-flash", "*llm.GeminiClient"},
 	}
 
 	for _, tt := range tests {
@@ -432,26 +432,26 @@ func typeReflect(v any) string {
 	}
 }
 
-// --- E2E-009: Backward Compatibility -- Gemini and Claude Routing Unchanged ---
+// --- E2E-009: Google and Anthropic Explicit Provider Routing ---
 
-func TestBackwardCompatibilityRouting(t *testing.T) {
+func TestExplicitProviderRouting(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "fake")
 	t.Setenv("ANTHROPIC_API_KEY", "fake")
 
-	gemini, err := NewClient("gemini-2.5-flash")
+	gemini, err := NewClient("google:gemini-2.5-flash")
 	if err != nil {
-		t.Fatalf("NewClient(gemini) error: %v", err)
+		t.Fatalf("NewClient(google:gemini) error: %v", err)
 	}
 	if _, ok := gemini.(*GeminiClient); !ok {
-		t.Errorf("gemini-2.5-flash returned %T, want *GeminiClient", gemini)
+		t.Errorf("google:gemini-2.5-flash returned %T, want *GeminiClient", gemini)
 	}
 
-	claude, err := NewClient("claude-sonnet-4-20250514")
+	claude, err := NewClient("anthropic:claude-sonnet-4-20250514")
 	if err != nil {
-		t.Fatalf("NewClient(claude) error: %v", err)
+		t.Fatalf("NewClient(anthropic:claude) error: %v", err)
 	}
 	if _, ok := claude.(*ClaudeClient); !ok {
-		t.Errorf("claude-sonnet-4-20250514 returned %T, want *ClaudeClient", claude)
+		t.Errorf("anthropic:claude-sonnet-4-20250514 returned %T, want *ClaudeClient", claude)
 	}
 }
 
@@ -460,7 +460,7 @@ func TestBackwardCompatibilityRouting(t *testing.T) {
 func TestOllamaBaseURLFromEnv(t *testing.T) {
 	t.Setenv("OLLAMA_BASE_URL", "http://custom-host:9999/v1")
 
-	client, err := NewClient("ollama-llama3")
+	client, err := NewClient("ollama:llama3")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestOllamaBaseURLFromEnv(t *testing.T) {
 
 	// Default when env var is not set
 	t.Setenv("OLLAMA_BASE_URL", "")
-	client2, err := NewClient("ollama-llama3")
+	client2, err := NewClient("ollama:llama3")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestAuthorizationOmittedWhenEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "ollama", baseURL: srv.URL, apiKeyEnv: "", prefix: "ollama-"}
+	cfg := providerConfig{name: "ollama", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "llama3")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -545,11 +545,11 @@ func TestAuthorizationOmittedWhenEmpty(t *testing.T) {
 func TestMixedProviderConfigs(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 
-	ollamaClient, err := NewClient("ollama-llama3")
+	ollamaClient, err := NewClient("ollama:llama3")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	openaiClient, err := NewClient("openai-gpt-4o")
+	openaiClient, err := NewClient("openai:gpt-4o")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestAPIError401(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -617,7 +617,7 @@ func TestAPIError429(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -645,7 +645,7 @@ func TestAPIError404(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -670,7 +670,7 @@ func TestAPIError500(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -688,7 +688,7 @@ func TestAPIError500(t *testing.T) {
 // --- E2E-018: Ollama Server Unreachable ---
 
 func TestOllamaServerUnreachable(t *testing.T) {
-	cfg := providerConfig{name: "ollama", baseURL: "http://localhost:1/v1", apiKeyEnv: "", prefix: "ollama-"}
+	cfg := providerConfig{name: "ollama", baseURL: "http://localhost:1/v1", apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "llama3")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -709,7 +709,7 @@ func TestMalformedToolCallArguments(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, testTools())
@@ -730,7 +730,7 @@ func TestEmptyChoicesArray(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	_, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, nil)
@@ -763,7 +763,7 @@ func TestResponseWithBothTextAndToolCall(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	resp, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, testTools())
@@ -792,7 +792,7 @@ func TestSystemPromptHandling(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	// With system prompt
@@ -835,7 +835,7 @@ func TestEmptyToolSchema(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	tools := []mcp.Tool{
@@ -865,21 +865,27 @@ func TestEmptyToolSchema(t *testing.T) {
 	}
 }
 
-// --- E2E-024: Model with No Matching Prefix Falls to Gemini Default ---
+// --- E2E-024: Unknown Provider Returns Error ---
 
-func TestDefaultFallbackToGemini(t *testing.T) {
-	t.Setenv("GEMINI_API_KEY", "fake")
+func TestUnknownProviderReturnsError(t *testing.T) {
+	_, err := NewClient("foobar:some-model")
+	if err == nil {
+		t.Fatal("expected error for unknown provider, got nil")
+	}
+	if !strings.Contains(err.Error(), `unknown LLM provider: "foobar"`) {
+		t.Errorf("error = %q, want unknown LLM provider message", err.Error())
+	}
+}
 
-	client, err := NewClient("some-unknown-model-name")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// --- Missing Colon Returns Error ---
+
+func TestMissingColonReturnsError(t *testing.T) {
+	_, err := NewClient("gemini-2.5-flash")
+	if err == nil {
+		t.Fatal("expected error for missing colon, got nil")
 	}
-	gemini, ok := client.(*GeminiClient)
-	if !ok {
-		t.Fatalf("expected *GeminiClient, got %T", client)
-	}
-	if gemini.model != "some-unknown-model-name" {
-		t.Errorf("got model %q, want %q", gemini.model, "some-unknown-model-name")
+	if !strings.Contains(err.Error(), "expected \"provider:model\"") {
+		t.Errorf("error = %q, want provider:model format message", err.Error())
 	}
 }
 
@@ -908,7 +914,7 @@ func TestNestedToolCallArguments(t *testing.T) {
 		},
 	}
 
-	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: "", prefix: "openai-"}
+	cfg := providerConfig{name: "openai", baseURL: srv.URL, apiKeyEnv: ""}
 	client := NewOpenAICompatibleClient(cfg, "gpt-4o")
 
 	resp, err := client.GenerateWithTools(context.Background(), "", []Message{{Role: "user", Content: "test"}}, tools)
@@ -945,7 +951,7 @@ func TestNestedToolCallArguments(t *testing.T) {
 func TestLazyValidation(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 
-	client, err := NewClient("openai-gpt-4o")
+	client, err := NewClient("openai:gpt-4o")
 	if err != nil {
 		t.Fatalf("NewClient should succeed without API key, got error: %v", err)
 	}

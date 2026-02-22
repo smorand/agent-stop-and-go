@@ -6,7 +6,7 @@ port: 9091
 data_dir: ./data/e2e_test_loop
 
 llm:
-  model: gemini-3-flash-preview
+  model: google:gemini-3-flash-preview
 
 mcp_servers:
   - name: resources
@@ -19,7 +19,7 @@ agent:
   agents:
     - name: checker
       type: llm
-      model: gemini-3-flash-preview
+      model: google:gemini-3-flash-preview
       can_exit_loop: true
       prompt: |
         You are a resource checker. Follow these steps exactly:

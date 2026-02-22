@@ -83,7 +83,7 @@ func Load(path string) (*Config, error) {
 		cfg.DataDir = "./data"
 	}
 	if cfg.LLM.Model == "" {
-		cfg.LLM.Model = "gemini-2.5-flash"
+		cfg.LLM.Model = "google:gemini-2.5-flash"
 	}
 
 	// Validate MCP server configs

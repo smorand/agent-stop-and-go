@@ -17,35 +17,31 @@ type providerConfig struct {
 	name      string
 	baseURL   string
 	apiKeyEnv string
-	prefix    string
 	headers   map[string]string
 }
 
 // providers is the registry of OpenAI-compatible provider configurations.
+// Adding a new provider requires only a new entry here.
 var providers = map[string]providerConfig{
 	"openai": {
 		name:      "openai",
 		baseURL:   "https://api.openai.com/v1",
 		apiKeyEnv: "OPENAI_API_KEY",
-		prefix:    "openai-",
 	},
 	"mistral": {
 		name:      "mistral",
 		baseURL:   "https://api.mistral.ai/v1",
 		apiKeyEnv: "MISTRAL_API_KEY",
-		prefix:    "mistral-",
 	},
 	"ollama": {
 		name:      "ollama",
 		baseURL:   "http://localhost:11434/v1",
 		apiKeyEnv: "",
-		prefix:    "ollama-",
 	},
 	"openrouter": {
 		name:      "openrouter",
 		baseURL:   "https://openrouter.ai/api/v1",
 		apiKeyEnv: "OPENROUTER_API_KEY",
-		prefix:    "openrouter-",
 		headers: map[string]string{
 			"HTTP-Referer": "https://github.com/agentic-platform",
 			"X-Title":      "Agent Stop and Go",
@@ -60,8 +56,15 @@ type OpenAICompatibleClient struct {
 	client *http.Client
 }
 
-// NewOpenAICompatibleClient creates a new client for the given provider config and model name (prefix already stripped).
+// NewOpenAICompatibleClient creates a new client for the given provider config and model name.
+// Validation is lazy: missing API keys do not cause errors at creation time.
 func NewOpenAICompatibleClient(cfg providerConfig, model string) *OpenAICompatibleClient {
+	// Ollama: override base URL from env var
+	if cfg.name == "ollama" {
+		if envURL := os.Getenv("OLLAMA_BASE_URL"); envURL != "" {
+			cfg.baseURL = envURL
+		}
+	}
 	return &OpenAICompatibleClient{
 		model:  model,
 		config: cfg,

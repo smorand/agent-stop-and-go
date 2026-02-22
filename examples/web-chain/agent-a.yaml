@@ -14,7 +14,7 @@ port: 8080
 data_dir: ./data/web-chain-a
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 # Dummy MCP (required by framework, but Agent A doesn't use tools directly)
 mcp:

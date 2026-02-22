@@ -6,7 +6,7 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 mcp:
   command: ./bin/mcp-resources
@@ -22,7 +22,7 @@ agent:
   agents:
     - name: checker
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: check_result
       can_exit_loop: true
       prompt: |

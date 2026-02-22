@@ -4,26 +4,28 @@ This document covers every feature of Agent Stop and Go in detail, including con
 
 ## Multi-LLM Support
 
-The system supports 6 LLM providers through 3 client implementations, with automatic routing based on model name prefix.
+The system supports 6 LLM providers through 3 client implementations, with explicit `provider:model` routing.
 
 ### Provider Routing
 
-| Provider | Model Prefix | Example Models | Env Variable |
-|----------|-------------|----------------|-------------|
-| Google Gemini | *(default)* | `gemini-2.5-flash`, `gemini-2.5-pro` | `GEMINI_API_KEY` |
-| Anthropic Claude | `claude-*` | `claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
-| OpenAI | `openai-*` | `openai-gpt-4o`, `openai-gpt-4o-mini` | `OPENAI_API_KEY` |
-| Mistral | `mistral-*` | `mistral-large-latest`, `mistral-small-latest` | `MISTRAL_API_KEY` |
-| Ollama | `ollama-*` | `ollama-llama3`, `ollama-mistral` | *(none)* |
-| OpenRouter | `openrouter-*` | `openrouter-anthropic/claude-3-opus` | `OPENROUTER_API_KEY` |
+Format: `provider:model` (colon is mandatory). Missing colon or unknown provider returns an error.
 
-The prefix (including trailing hyphen) is stripped before sending to the API. Example: `openai-gpt-4o` sends `gpt-4o` to the OpenAI API.
+| Provider | Prefix | Example Models | Env Variable |
+|----------|--------|----------------|-------------|
+| Google Gemini | `google:` | `google:gemini-2.5-flash`, `google:gemini-2.5-pro` | `GEMINI_API_KEY` |
+| Anthropic Claude | `anthropic:` | `anthropic:claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai:` | `openai:gpt-4o`, `openai:gpt-4o-mini` | `OPENAI_API_KEY` |
+| Mistral | `mistral:` | `mistral:mistral-large-latest`, `mistral:mistral-small-latest` | `MISTRAL_API_KEY` |
+| Ollama | `ollama:` | `ollama:llama3`, `ollama:mistral` | *(none)* |
+| OpenRouter | `openrouter:` | `openrouter:anthropic/claude-3-opus` | `OPENROUTER_API_KEY` |
+
+The model name after the colon is sent directly to the provider API without modification.
 
 ### Client Implementations
 
 | Client | Providers | File |
 |--------|-----------|------|
-| `GeminiClient` | Google Gemini (default fallback) | `internal/llm/gemini.go` |
+| `GeminiClient` | Google Gemini | `internal/llm/gemini.go` |
 | `ClaudeClient` | Anthropic Claude | `internal/llm/claude.go` |
 | `OpenAICompatibleClient` | OpenAI, Mistral, Ollama, OpenRouter | `internal/llm/openai.go` |
 
@@ -35,7 +37,7 @@ type Client interface {
 }
 ```
 
-The `OpenAICompatibleClient` is parameterized by a `providerConfig` containing base URL, API key env var, prefix, and optional custom headers. Adding a new OpenAI-compatible provider requires only adding a new entry to the `providers` registry map.
+The `OpenAICompatibleClient` is parameterized by a `providerConfig` containing base URL, API key env var, and optional custom headers. Adding a new OpenAI-compatible provider requires only adding a new entry to the `providers` registry map.
 
 ### Model Configuration
 
@@ -43,20 +45,20 @@ The default model is set at the top level. Individual orchestration nodes can ov
 
 ```yaml
 llm:
-  model: gemini-2.5-flash  # default for all nodes
+  model: google:gemini-2.5-flash  # default for all nodes
 
 agent:
   type: sequential
   agents:
     - name: analyzer
       type: llm
-      model: openai-gpt-4o  # overrides default (uses OpenAI)
+      model: openai:gpt-4o  # overrides default (uses OpenAI)
     - name: local-check
       type: llm
-      model: ollama-llama3   # uses local Ollama
+      model: ollama:llama3   # uses local Ollama
     - name: executor
       type: llm
-      # inherits gemini-2.5-flash from llm.model
+      # inherits google:gemini-2.5-flash from llm.model
 ```
 
 ### Provider-Specific Behavior

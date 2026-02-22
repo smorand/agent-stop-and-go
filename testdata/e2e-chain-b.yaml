@@ -6,7 +6,7 @@ port: 9092
 data_dir: ./data/e2e_test_chain_b
 
 llm:
-  model: gemini-3-flash-preview
+  model: google:gemini-3-flash-preview
 
 mcp_servers:
   - name: resources
