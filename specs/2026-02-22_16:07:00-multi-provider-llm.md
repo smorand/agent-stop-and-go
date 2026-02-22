@@ -43,7 +43,31 @@ Extend the agentic-platform's LLM provider system from 2 providers (Gemini + Cla
 
 **End User:** Sends messages to the agent via REST API or web UI. Unaware of which LLM provider is used behind the scenes. Expects consistent behavior regardless of provider.
 
-## 4. Usage Scenarios
+## 4. Authentication & Environment Variables
+
+Each LLM provider requires its own authentication method. All API keys are sourced exclusively from environment variables — never from config files.
+
+| Provider | Env Variable | Required | Description |
+|----------|-------------|----------|-------------|
+| Gemini | `GEMINI_API_KEY` | When using Gemini models (default provider) | API key from Google AI Studio |
+| Claude/Anthropic | `ANTHROPIC_API_KEY` | When using `claude-*` models | API key from Anthropic Console |
+| OpenAI | `OPENAI_API_KEY` | When using `openai-*` models | API key from OpenAI Platform |
+| Mistral | `MISTRAL_API_KEY` | When using `mistral-*` models | API key from Mistral AI Console |
+| OpenRouter | `OPENROUTER_API_KEY` | When using `openrouter-*` models | API key from OpenRouter |
+| Ollama | *(none)* | — | Local inference, no API key needed. Runs on `localhost:11434` by default |
+
+**Additional configuration:**
+
+| Env Variable | Default | Description |
+|-------------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Override Ollama endpoint when running on a different host/port |
+
+**Key behaviors:**
+- Validation is **lazy**: missing keys do not cause errors at startup. The error occurs on first API call to that provider (HTTP 401).
+- Only providers actually used in the agent config need their env var set.
+- Ollama skips the `Authorization` header entirely (no dummy key needed).
+
+## 5. Usage Scenarios
 
 ### SC-001: OpenAI Model Configuration and Usage
 
@@ -158,7 +182,7 @@ Extend the agentic-platform's LLM provider system from 2 providers (Gemini + Cla
 **Postconditions:** Tool call arguments match the schema types, consistent across all 6 providers.
 **Exceptions:** None -- `CoerceToolCallArgs` handles unknown tools and nil tool calls gracefully (existing behavior).
 
-## 5. Functional Requirements
+## 6. Functional Requirements
 
 ### FR-001: OpenAICompatibleClient Struct
 
@@ -275,38 +299,38 @@ Extend the agentic-platform's LLM provider system from 2 providers (Gemini + Cla
   - `docs/`: Update relevant docs (overview.md, functionalities.md) with multi-provider information.
 - **Priority:** Must-have
 
-## 6. Non-Functional Requirements
+## 7. Non-Functional Requirements
 
-### 6.1 Performance
+### 7.1 Performance
 
 - All provider clients must use the existing `httpClientTimeout` constant (60 seconds) for HTTP requests.
 - No additional latency introduced by provider routing (prefix matching is O(n) with n=5 prefixes, negligible).
 
-### 6.2 Security
+### 7.2 Security
 
 - API keys must be sourced exclusively from environment variables, never from config files.
 - API keys must not appear in log output or error messages.
 - The `Authorization` header must use `Bearer` scheme for all providers that require authentication.
 
-### 6.3 Maintainability
+### 7.3 Maintainability
 
 - Adding a new OpenAI-compatible provider must require only adding a new entry to the provider config registry (no new Go file, no new struct).
 - The `OpenAICompatibleClient` must contain zero provider-specific branching logic (all differences are in the config data).
 
-### 6.4 Testability
+### 7.4 Testability
 
 - All new code must have unit tests using `net/http/httptest` mock servers.
 - Tests must not require real API keys or network access.
 - Tests must cover: prefix routing, request building, response parsing (text and tool calls), error handling (all HTTP error codes), header behavior (Authorization, custom headers), and edge cases (empty schemas, nested arguments, system prompt handling).
 
-### 6.5 Backward Compatibility
+### 7.5 Backward Compatibility
 
 - Existing `GeminiClient` and `ClaudeClient` Go source files must not be modified.
 - Existing configs with `gemini-*` (default) or `claude-*` models must produce identical behavior.
 - The `llm.Client` interface must not change.
 - The `CoerceToolCallArgs` function must not change.
 
-## 7. Data Model
+## 8. Data Model
 
 No new data entities or persistent storage. The change is limited to the `internal/llm/` package.
 
@@ -335,18 +359,18 @@ var providers = map[string]providerConfig{
 }
 ```
 
-## 8. Documentation Requirements
+## 9. Documentation Requirements
 
 All documentation listed below must be created and maintained as part of this project.
 
-### 8.1 CLAUDE.md
+### 9.1 CLAUDE.md
 
 Update the existing `CLAUDE.md` with:
 - New environment variables in the Environment Variables section: `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `OLLAMA_BASE_URL`, `OPENROUTER_API_KEY`
 - Model prefix routing table in Key Concepts or a new LLM Providers section
 - Updated project structure if new files are added to `internal/llm/`
 
-### 8.2 .agent_docs/
+### 9.2 .agent_docs/
 
 Create or update `.agent_docs/llm-providers.md` with:
 - Provider architecture overview (3 client implementations)
@@ -355,14 +379,14 @@ Create or update `.agent_docs/llm-providers.md` with:
 - Environment variable reference for all 6 providers
 - Model prefix routing rules
 
-### 8.3 docs/
+### 9.3 docs/
 
 Update `docs/overview.md` and `docs/functionalities.md` with:
 - List of supported LLM providers
 - Configuration examples for each provider
 - Mixed-provider pipeline examples
 
-## 9. Traceability Matrix
+## 10. Traceability Matrix
 
 | Scenario | Functional Req | E2E Tests (Happy) | E2E Tests (Failure) | E2E Tests (Edge) |
 |----------|---------------|-------------------|---------------------|-------------------|
@@ -378,14 +402,14 @@ Update `docs/overview.md` and `docs/functionalities.md` with:
 - All 7 scenarios have at least one happy-path test.
 - All 7 scenarios have failure coverage (SC-002/SC-004/SC-005 share the same `OpenAICompatibleClient` error handling validated in SC-001 tests).
 - All 7 scenarios have edge case coverage (SC-002/SC-003/SC-004/SC-005 share the same client logic validated in SC-001 edge tests).
-- All 14 functional requirements appear in at least one test (see Section 10.1).
+- All 14 functional requirements appear in at least one test (see Section 11.1).
 - No orphan tests, requirements, or scenarios.
 
-## 10. End-to-End Test Suite
+## 11. End-to-End Test Suite
 
 All tests must be implemented in `internal/llm/` as Go unit tests using `net/http/httptest` mock servers. Tests must not require real API keys or network access.
 
-### 10.1 Test Summary
+### 11.1 Test Summary
 
 | Test ID | Category | Scenario | FR refs | Priority |
 |---------|----------|----------|---------|----------|
@@ -416,7 +440,7 @@ All tests must be implemented in `internal/llm/` as Go unit tests using `net/htt
 | E2E-025 | Edge | SC-007 | FR-009 | Medium |
 | E2E-026 | Edge | SC-001 | FR-010 | Medium |
 
-### 10.2 Test Specifications
+### 11.2 Test Specifications
 
 #### E2E-001: OpenAI Text Response
 - **Category:** Core Journey
@@ -763,11 +787,11 @@ All tests must be implemented in `internal/llm/` as Go unit tests using `net/htt
   - And the returned client is a valid `*OpenAICompatibleClient`
 - **Priority:** Medium
 
-## 11. Open Questions & TBDs
+## 12. Open Questions & TBDs
 
 None. All questions were resolved during the discovery interview.
 
-## 12. Glossary
+## 13. Glossary
 
 | Term | Definition |
 |------|-----------|
