@@ -292,6 +292,7 @@ The agent exposes itself as an A2A-compliant server:
 |-------|---------|
 | `completed` | Task finished successfully |
 | `input-required` | Task waiting for approval (destructive operation pending) |
+| `auth-required` | Task cannot proceed — MCP server requires authentication (HTTP 401) |
 
 ### A2A Approval via Message
 
@@ -533,12 +534,13 @@ The web chat (`cmd/web`) provides a browser-based interface for interacting with
 
 ### Architecture
 
-The web frontend is a separate Go binary that proxies requests to the agent's REST API. It does **not** use the A2A protocol (which is reserved for agent-to-agent communication).
+The web frontend is a separate Go binary that proxies requests to the agent's REST API. It does **not** use the A2A protocol (which is reserved for agent-to-agent communication). When OAuth2 is configured, the web server manages server-side sessions in SQLite and injects Bearer tokens into proxied requests.
 
 ```mermaid
 flowchart LR
     Browser -->|"HTML/JS"| Web["Web Server<br/>(:3000)"]
-    Web -->|"REST API"| Agent["Agent API<br/>(:8080)"]
+    Web -->|"REST API<br/>(+ Bearer token)"| Agent["Agent API<br/>(:8080)"]
+    Web -.->|"SQLite"| DB["sessions.db"]
 ```
 
 ### Configuration
@@ -548,6 +550,17 @@ flowchart LR
 agent_url: http://localhost:8080
 host: 0.0.0.0
 port: 3000
+data_dir: ./data                   # Directory for sessions.db
+
+# Optional: OAuth2 authorization code flow
+# oauth2:
+#   client_id: "xxx.apps.googleusercontent.com"
+#   client_secret: "GOCSPX-xxx"
+#   auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+#   token_url: "https://oauth2.googleapis.com/token"
+#   revoke_url: "https://oauth2.googleapis.com/revoke"
+#   redirect_url: "http://localhost:8080/callback"
+#   scopes: ["openid", "https://www.googleapis.com/auth/contacts"]
 ```
 
 ### Routes
@@ -558,6 +571,47 @@ port: 3000
 | `POST /api/send` | Send message (proxies to agent REST API) |
 | `POST /api/approve` | Approve/reject (proxies to `POST /approvals/:uuid`) |
 | `GET /api/conversation/:id` | Get conversation state |
+
+When OAuth2 is configured, additional routes are registered:
+
+| Route | Description |
+|-------|-------------|
+| `GET /login` | Starts OAuth2 authorization code flow (redirects to provider) |
+| `GET /callback` | Handles provider redirect, exchanges code for tokens, creates session |
+| `POST /logout` | Revokes token at provider, deletes session, clears cookie |
+| `GET /api/session` | Returns `{"authenticated": true/false}` |
+
+### OAuth2 Token Flow
+
+When the web server has an active session, it injects the Bearer token into all proxied requests:
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Web as Web Server
+    participant Agent as Agent API
+    participant MCP as MCP Server
+
+    Browser->>Web: POST /api/send (cookie: asg_session)
+    Web->>Web: Read session from SQLite
+    Web->>Web: Check token expiry (60s buffer)
+    alt Token expired
+        Web->>Web: Refresh token via provider
+    end
+    Web->>Agent: POST /conversations/:id/messages<br/>Authorization: Bearer <token>
+    Agent->>MCP: CallTool (token in context)
+    MCP-->>Agent: Result
+    Agent-->>Web: JSON response
+    Web-->>Browser: JSON response
+```
+
+### Auth-Required Response
+
+When the agent returns `auth_required: true`, the JavaScript frontend:
+1. Stores the pending message in `sessionStorage`
+2. Redirects to `/login` (starts OAuth2 flow)
+3. After callback, auto-retries the original message
+4. If retry also returns `auth_required`, shows an error (infinite loop protection)
 
 ## REST API Reference
 

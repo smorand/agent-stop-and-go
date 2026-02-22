@@ -349,7 +349,7 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 				})
 			}
 
-			task := conversationToTask(conv, result.Response)
+			task := conversationToTask(conv, result.Response, result.AuthRequired)
 			taskBytes, err := json.Marshal(task)
 			if err != nil {
 				return c.JSON(a2a.Response{
@@ -384,7 +384,7 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 				Error:   &a2a.RPCError{Code: -32603, Message: err.Error()},
 			})
 		}
-		task := conversationToTask(updatedConv, result.Response)
+		task := conversationToTask(updatedConv, result.Response, result.AuthRequired)
 		taskBytes, err := json.Marshal(task)
 		if err != nil {
 			return c.JSON(a2a.Response{
@@ -430,7 +430,7 @@ func (s *Server) a2aMessageSend(c *fiber.Ctx, req a2a.Request) error {
 		})
 	}
 
-	task := conversationToTask(updatedConv, result.Response)
+	task := conversationToTask(updatedConv, result.Response, result.AuthRequired)
 	taskBytes, err := json.Marshal(task)
 	if err != nil {
 		return c.JSON(a2a.Response{
@@ -486,7 +486,7 @@ func (s *Server) a2aTasksGet(c *fiber.Ctx, req a2a.Request) error {
 		})
 	}
 
-	task := conversationToTask(conv, "")
+	task := conversationToTask(conv, "", false)
 	taskBytes, err := json.Marshal(task)
 	if err != nil {
 		return c.JSON(a2a.Response{
@@ -504,13 +504,20 @@ func (s *Server) a2aTasksGet(c *fiber.Ctx, req a2a.Request) error {
 }
 
 // conversationToTask maps a conversation to an A2A Task.
-func conversationToTask(conv *conversation.Conversation, responseText string) a2a.Task {
+// If authRequired is true, the task state is set to "auth-required".
+func conversationToTask(conv *conversation.Conversation, responseText string, authRequired bool) a2a.Task {
 	task := a2a.Task{
 		ID: conv.ID,
 	}
 
-	switch conv.Status {
-	case conversation.StatusWaitingApproval:
+	switch {
+	case authRequired:
+		msg := responseText
+		if msg == "" {
+			msg = "Authentication required"
+		}
+		task.Status = a2a.TaskStatus{State: "auth-required", Message: &msg}
+	case conv.Status == conversation.StatusWaitingApproval:
 		msg := "Waiting for approval"
 		if conv.PendingApproval != nil {
 			msg = fmt.Sprintf("Approval required (id: %s): %s", conv.PendingApproval.UUID, conv.PendingApproval.Description)

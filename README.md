@@ -9,7 +9,8 @@ A generic API for building async autonomous agents that can orchestrate tools (M
 - **A2A Client**: Delegate tasks to other agents using the A2A protocol
 - **A2A Server**: Expose the agent as an A2A-compliant server for discovery and task execution by other agents
 - **Approval Workflow**: Destructive operations require explicit approval before execution
-- **Authorization Forwarding**: Bearer tokens are propagated to sub-agents (Zero Trust)
+- **Authorization Forwarding**: Bearer tokens are propagated to sub-agents and MCP servers (Zero Trust)
+- **OAuth2 Web UI**: Optional on-demand OAuth2 flow in the web chat for MCP servers requiring authentication
 - **Agent Orchestration**: Compose agents with sequential, parallel, and loop patterns (inspired by Google ADK)
 - **MCP Filesystem Server**: Sandboxed filesystem operations with chroot-like security, per-root tool allowlists, unified diff patching, grep, and glob
 - **Generic Architecture**: Swap the MCP server, LLM model, and prompt to create different agents
@@ -400,9 +401,33 @@ make build
 agent_url: http://localhost:8080
 host: 0.0.0.0
 port: 3000
+data_dir: ./data                   # Directory for sessions.db (OAuth2 sessions)
+
+# Optional: OAuth2 authorization code flow (e.g., Google)
+# Enables on-demand login when an MCP server requires authentication (HTTP 401).
+# oauth2:
+#   client_id: "xxx.apps.googleusercontent.com"
+#   client_secret: "GOCSPX-xxx"
+#   auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+#   token_url: "https://oauth2.googleapis.com/token"
+#   revoke_url: "https://oauth2.googleapis.com/revoke"
+#   redirect_url: "http://localhost:8080/callback"
+#   scopes:
+#     - "openid"
+#     - "https://www.googleapis.com/auth/contacts"
 ```
 
 Open http://localhost:3000 in your browser.
+
+### OAuth2 Authentication (Optional)
+
+When `oauth2` is configured, the web server supports on-demand authentication:
+
+1. Users chat without logging in — no login wall
+2. When an MCP tool requires auth (returns 401), the UI redirects to the OAuth2 provider
+3. After consent, the user returns to the chat and the original message is auto-retried
+4. OAuth2 tokens are stored server-side in SQLite; the browser only gets an `HttpOnly` session cookie
+5. Tokens are auto-refreshed when expired; logout revokes the token at the provider
 
 ### Proxy Approval Chain
 

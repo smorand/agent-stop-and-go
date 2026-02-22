@@ -1,6 +1,9 @@
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // JSON-RPC 2.0 protocol types for MCP communication.
 
@@ -98,4 +101,14 @@ type CallToolResult struct {
 type ContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// AuthRequiredError is returned when an MCP server responds with HTTP 401 Unauthorized.
+type AuthRequiredError struct {
+	Server string
+	Tool   string
+}
+
+func (e *AuthRequiredError) Error() string {
+	return fmt.Sprintf("authentication required: MCP server %s returned 401 for tool %s", e.Server, e.Tool)
 }

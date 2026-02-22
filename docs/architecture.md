@@ -95,10 +95,14 @@ sequenceDiagram
     LLM-->>AG: Response (text or tool_call)
 
     alt Tool Call (non-destructive)
-        AG->>MCP: CallTool(name, args)
+        AG->>MCP: CallTool(ctx, name, args)
         MCP-->>AG: Tool result
         AG->>Store: SaveConversation
         AG-->>API: ProcessResult{response}
+    else MCP returns 401
+        AG->>MCP: CallTool(ctx, name, args)
+        MCP-->>AG: HTTP 401 (AuthRequiredError)
+        AG-->>API: ProcessResult{auth_required: true}
     else Tool Call (destructive)
         AG->>Store: SaveConversation (waiting_approval)
         AG-->>API: ProcessResult{waiting_approval, approval_uuid}
@@ -316,14 +320,28 @@ flowchart LR
 
 ## Auth Flow
 
-Bearer tokens flow through the entire agent chain, enabling end-to-end authentication without the agent needing to understand the token content.
+Bearer tokens flow through the entire agent chain — to both A2A agents and MCP servers — enabling end-to-end authentication without the agent needing to understand the token content.
 
 ```mermaid
 flowchart LR
     Client -->|"Authorization: Bearer TOKEN"| API
     API -->|"auth.WithBearerToken(ctx)"| Agent
     Agent -->|"Authorization: Bearer TOKEN"| A2AAgent["A2A Sub-Agent"]
+    Agent -->|"Authorization: Bearer TOKEN"| MCPServer["MCP Server (HTTP)"]
     A2AAgent -->|"Authorization: Bearer TOKEN"| NextAgent["Next Agent..."]
+```
+
+When an MCP server returns HTTP 401, the agent propagates `auth_required` back through the chain. The web UI can then trigger an OAuth2 flow to obtain a token.
+
+### Web UI Session Storage
+
+The web chat frontend (`cmd/web`) optionally manages OAuth2 sessions in SQLite:
+
+```mermaid
+flowchart LR
+    Browser -->|"Cookie: asg_session"| Web["Web Server"]
+    Web -->|"Read/Write"| SQLite["sessions.db<br/>(access_token, refresh_token, expiry)"]
+    Web -->|"Bearer TOKEN"| Agent["Agent API"]
 ```
 
 ## Key Design Decisions

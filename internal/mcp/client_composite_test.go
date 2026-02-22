@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ type mockClient struct {
 	tools     []Tool
 	startErr  error
 	stopErr   error
-	callFunc  func(name string, args map[string]any) (*CallToolResult, error)
+	callFunc  func(ctx context.Context, name string, args map[string]any) (*CallToolResult, error)
 	started   bool
 	stopped   bool
 	callCount int
@@ -44,10 +45,10 @@ func (m *mockClient) GetTool(name string) *Tool {
 	return nil
 }
 
-func (m *mockClient) CallTool(name string, args map[string]any) (*CallToolResult, error) {
+func (m *mockClient) CallTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, error) {
 	m.callCount++
 	if m.callFunc != nil {
-		return m.callFunc(name, args)
+		return m.callFunc(ctx, name, args)
 	}
 	return &CallToolResult{
 		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("result from %s", m.name)}},
@@ -174,7 +175,7 @@ func TestCompositeClient_CallToolRouting(t *testing.T) {
 	clientA := &mockClient{
 		name:  "a",
 		tools: []Tool{{Name: "tool_x"}},
-		callFunc: func(name string, args map[string]any) (*CallToolResult, error) {
+		callFunc: func(_ context.Context, _ string, _ map[string]any) (*CallToolResult, error) {
 			return &CallToolResult{
 				Content: []ContentBlock{{Type: "text", Text: "from-a"}},
 			}, nil
@@ -183,7 +184,7 @@ func TestCompositeClient_CallToolRouting(t *testing.T) {
 	clientB := &mockClient{
 		name:  "b",
 		tools: []Tool{{Name: "tool_z"}},
-		callFunc: func(name string, args map[string]any) (*CallToolResult, error) {
+		callFunc: func(_ context.Context, _ string, _ map[string]any) (*CallToolResult, error) {
 			return &CallToolResult{
 				Content: []ContentBlock{{Type: "text", Text: "from-b"}},
 			}, nil
@@ -201,7 +202,7 @@ func TestCompositeClient_CallToolRouting(t *testing.T) {
 	defer cc.Stop()
 
 	// Call tool_z → should route to server-b
-	result, err := cc.CallTool("tool_z", nil)
+	result, err := cc.CallTool(context.Background(), "tool_z", nil)
 	if err != nil {
 		t.Fatalf("CallTool error: %v", err)
 	}
@@ -233,7 +234,7 @@ func TestCompositeClient_CallToolUnknown(t *testing.T) {
 	}
 	defer cc.Stop()
 
-	_, err := cc.CallTool("nonexistent", nil)
+	_, err := cc.CallTool(context.Background(), "nonexistent", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
 	}
@@ -323,7 +324,7 @@ func TestCompositeClient_EmptyClients(t *testing.T) {
 		t.Fatalf("expected 0 tools, got %d", len(tools))
 	}
 
-	_, err := cc.CallTool("anything", nil)
+	_, err := cc.CallTool(context.Background(), "anything", nil)
 	if err == nil {
 		t.Fatal("expected error for CallTool on empty composite")
 	}

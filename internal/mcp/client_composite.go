@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -123,7 +124,7 @@ func (c *CompositeClient) GetTool(name string) *Tool {
 
 // CallTool routes the call to the sub-client that owns the tool.
 // It is serialized with a mutex for thread safety.
-func (c *CompositeClient) CallTool(name string, args map[string]any) (*CallToolResult, error) {
+func (c *CompositeClient) CallTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, error) {
 	c.mu.Lock()
 	idx, ok := c.toolMap[name]
 	if !ok {
@@ -133,5 +134,5 @@ func (c *CompositeClient) CallTool(name string, args map[string]any) (*CallToolR
 	client := c.clients[idx].Client
 	c.mu.Unlock()
 
-	return client.CallTool(name, args)
+	return client.CallTool(ctx, name, args)
 }

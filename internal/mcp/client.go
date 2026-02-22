@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,7 @@ type Client interface {
 	Stop() error
 	Tools() []Tool
 	GetTool(name string) *Tool
-	CallTool(name string, args map[string]any) (*CallToolResult, error)
+	CallTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, error)
 }
 
 // ClientConfig holds configuration for creating an MCP client.
@@ -45,7 +46,7 @@ func (c *NopClient) Start() error         { return nil }
 func (c *NopClient) Stop() error          { return nil }
 func (c *NopClient) Tools() []Tool        { return nil }
 func (c *NopClient) GetTool(string) *Tool { return nil }
-func (c *NopClient) CallTool(string, map[string]any) (*CallToolResult, error) {
+func (c *NopClient) CallTool(_ context.Context, _ string, _ map[string]any) (*CallToolResult, error) {
 	return nil, fmt.Errorf("no MCP server configured")
 }
 
@@ -153,7 +154,8 @@ func (c *StdioClient) GetTool(name string) *Tool {
 }
 
 // CallTool executes a tool with the given arguments.
-func (c *StdioClient) CallTool(name string, args map[string]any) (*CallToolResult, error) {
+// The context is accepted for interface compliance but not used by stdio transport.
+func (c *StdioClient) CallTool(_ context.Context, name string, args map[string]any) (*CallToolResult, error) {
 	params := CallToolParams{
 		Name:      name,
 		Arguments: args,

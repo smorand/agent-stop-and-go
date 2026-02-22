@@ -69,7 +69,7 @@ type Task struct {
 
 // TaskStatus represents the status of an A2A task.
 type TaskStatus struct {
-	State   string  `json:"state"` // "submitted", "input-required", "completed", "failed"
+	State   string  `json:"state"` // "submitted", "input-required", "auth-required", "completed", "failed"
 	Message *string `json:"message,omitempty"`
 }
 

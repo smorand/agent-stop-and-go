@@ -97,10 +97,11 @@ testdata/                             # E2E orchestration test configs
 
 ## Key Concepts
 
-- **MCP Server**: One or more standalone services providing tools. Configured as a list under `mcp_servers`, each with a required `name` field. Tools are aggregated by a `CompositeClient` that routes calls to the correct sub-client
+- **MCP Server**: One or more standalone services providing tools. Configured as a list under `mcp_servers`, each with a required `name` field. Tools are aggregated by a `CompositeClient` that routes calls to the correct sub-client. Bearer tokens from incoming requests are forwarded to MCP HTTP servers via `Authorization` header
 - **A2A Agents**: Remote agents accessible via JSON-RPC over HTTPS
 - **destructiveHint**: Tool/agent property indicating approval requirement
 - **Conversation Status**: `active`, `waiting_approval`, `completed`
+- **Auth Required**: MCP HTTP 401 is detected and propagated as `auth_required` in REST responses / `auth-required` in A2A task state
 - **Approval Flow**: Tools/agents with `destructiveHint=true` require explicit approval
 - **Auth Forwarding**: `Authorization: Bearer` tokens are forwarded to A2A agents
 - **Session ID**: 8-char hex ID generated per conversation at the entry point, propagated via `X-Session-ID` header to A2A agents, stored in `Conversation.SessionID`, and logged as `sid=` in request logs for cross-agent tracing
@@ -264,9 +265,24 @@ agent_url: http://localhost:8080   # Local dev (agent on same host)
 # In Docker Compose: agent_url: http://agent-a:8080
 host: 0.0.0.0
 port: 3000
+data_dir: ./data                   # SQLite session storage (sessions.db)
+
+# Optional: OAuth2 authorization code flow (e.g., Google)
+# oauth2:
+#   client_id: "xxx.apps.googleusercontent.com"
+#   client_secret: "GOCSPX-xxx"
+#   auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+#   token_url: "https://oauth2.googleapis.com/token"
+#   revoke_url: "https://oauth2.googleapis.com/revoke"
+#   redirect_url: "http://localhost:8080/callback"
+#   scopes: ["openid", "https://www.googleapis.com/auth/contacts"]
 ```
 
 Routes: `GET /` (chat UI), `POST /api/send`, `POST /api/approve`, `GET /api/conversation/:id`
+
+When `oauth2` is configured, additional routes are registered: `GET /login` (starts OAuth2 flow), `GET /callback` (handles provider redirect), `POST /logout` (revokes token + clears session), `GET /api/session` (returns `{"authenticated": true/false}`).
+
+OAuth2 tokens are stored server-side in SQLite (`data_dir/sessions.db`). The browser only receives an `HttpOnly` session cookie (`asg_session`). Token auto-refresh uses a 60-second expiry buffer. When an MCP tool returns 401, the JS frontend stores the pending message in `sessionStorage`, redirects to `/login`, and auto-retries after the OAuth2 flow completes.
 
 ## Docker Compose Architecture
 

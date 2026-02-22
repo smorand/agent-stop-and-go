@@ -1,8 +1,99 @@
 package main
 
+import "fmt"
+
 // chatHTML returns the embedded HTML chat interface.
-func chatHTML(agentURL string) string {
-	return `<!DOCTYPE html>
+// hasOAuth controls whether the login/logout buttons are rendered.
+func chatHTML(agentURL string, hasOAuth bool) string {
+	oauthJS := ""
+	logoutButton := ""
+	if hasOAuth {
+		logoutButton = `<button class="logout-btn" id="logoutBtn" style="display:none" onclick="doLogout()">Logout</button>`
+		oauthJS = `
+    // Check session status on load
+    async function checkSession() {
+        try {
+            const resp = await fetch('/api/session');
+            const data = await resp.json();
+            const btn = document.getElementById('logoutBtn');
+            if (btn) btn.style.display = data.authenticated ? 'inline-block' : 'none';
+        } catch (e) {}
+    }
+    checkSession();
+
+    function doLogout() {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/logout';
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    // Handle auth_required: store pending message and redirect to /login
+    function handleAuthRequired(message, conversationId) {
+        sessionStorage.setItem('pending_auth_message', JSON.stringify({
+            message: message,
+            conversation_id: conversationId || ''
+        }));
+        window.location.href = '/login';
+    }
+
+    // On page load, check for pending auth message (auto-retry after OAuth2 flow)
+    async function checkPendingAuthMessage() {
+        const pending = sessionStorage.getItem('pending_auth_message');
+        if (!pending) return;
+
+        sessionStorage.removeItem('pending_auth_message');
+        const data = JSON.parse(pending);
+
+        addMessage('system', 'Authentication completed. Retrying your request...');
+        addMessage('user', data.message);
+        showTyping();
+
+        sending = true;
+        sendBtn.disabled = true;
+
+        try {
+            const resp = await fetch('/api/send', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Auth-Retry': '1'
+                },
+                body: JSON.stringify({ message: data.message, conversation_id: data.conversation_id })
+            });
+
+            hideTyping();
+
+            if (!resp.ok) {
+                const err = await resp.json();
+                addMessage('error', 'Error: ' + (err.error || resp.statusText));
+                return;
+            }
+
+            const result = await resp.json();
+
+            // Infinite loop detection: if auth_required again after retry, show error
+            if (result.result && result.result.auth_required) {
+                addMessage('error', 'Authentication failed. The server rejected your credentials. Please check that you are using the correct Google account and that the required permissions are granted.');
+                return;
+            }
+
+            handleResult(result);
+        } catch (err) {
+            hideTyping();
+            addMessage('error', 'Network error: ' + err.message);
+        } finally {
+            sending = false;
+            sendBtn.disabled = false;
+            input.focus();
+        }
+    }
+    checkPendingAuthMessage();
+`
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -12,21 +103,23 @@ func chatHTML(agentURL string) string {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; display: flex; flex-direction: column; }
 
-        header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px 20px; display: flex; align-items: center; gap: 15px; }
+        header { background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); padding: 15px 20px; display: flex; align-items: center; gap: 15px; }
         header h1 { font-size: 1.4em; }
         header .status { font-size: 0.85em; opacity: 0.8; margin-left: auto; }
         header .new-chat { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.3); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
         header .new-chat:hover { background: rgba(255,255,255,0.3); }
+        header .logout-btn { background: rgba(255,100,100,0.3); color: #fff; border: 1px solid rgba(255,100,100,0.4); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: bold; }
+        header .logout-btn:hover { background: rgba(255,100,100,0.5); }
 
         .chat-container { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 
-        .message { max-width: 80%; padding: 12px 16px; border-radius: 12px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
+        .message { max-width: 80%%; padding: 12px 16px; border-radius: 12px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
         .message.user { align-self: flex-end; background: #667eea; color: #fff; border-bottom-right-radius: 4px; }
         .message.assistant { align-self: flex-start; background: #252540; border: 1px solid #3a3a5c; border-bottom-left-radius: 4px; }
-        .message.system { align-self: center; background: #1e1e3f; color: #888; font-size: 0.85em; border-radius: 8px; max-width: 90%; text-align: center; }
+        .message.system { align-self: center; background: #1e1e3f; color: #888; font-size: 0.85em; border-radius: 8px; max-width: 90%%; text-align: center; }
         .message.error { align-self: center; background: #3e1e1e; color: #f93e3e; border: 1px solid #5e2e2e; }
 
-        .approval-box { align-self: flex-start; background: #2a2a1e; border: 1px solid #fca130; border-radius: 12px; padding: 16px; max-width: 80%; }
+        .approval-box { align-self: flex-start; background: #2a2a1e; border: 1px solid #fca130; border-radius: 12px; padding: 16px; max-width: 80%%; }
         .approval-box .label { color: #fca130; font-weight: bold; margin-bottom: 8px; font-size: 0.9em; text-transform: uppercase; }
         .approval-box .desc { margin-bottom: 12px; white-space: pre-wrap; line-height: 1.5; }
         .approval-box .actions { display: flex; gap: 10px; }
@@ -46,7 +139,7 @@ func chatHTML(agentURL string) string {
 
         .typing { align-self: flex-start; color: #888; font-style: italic; padding: 8px 16px; }
         .typing::after { content: '...'; animation: dots 1.5s infinite; }
-        @keyframes dots { 0%, 20% { content: '.'; } 40% { content: '..'; } 60%, 100% { content: '...'; } }
+        @keyframes dots { 0%%, 20%% { content: '.'; } 40%% { content: '..'; } 60%%, 100%% { content: '...'; } }
 
         code { background: #1e1e3f; padding: 2px 6px; border-radius: 4px; font-family: 'Monaco', 'Menlo', monospace; font-size: 0.9em; }
         pre { background: #1e1e3f; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
@@ -57,7 +150,8 @@ func chatHTML(agentURL string) string {
     <header>
         <h1>Agent Stop and Go</h1>
         <button class="new-chat" onclick="newChat()">New Chat</button>
-        <span class="status">Connected to ` + agentURL + `</span>
+        %s
+        <span class="status">Connected to %s</span>
     </header>
 
     <div class="chat-container" id="chat">
@@ -72,6 +166,7 @@ func chatHTML(agentURL string) string {
     <script>
     let currentConversationId = null;
     let sending = false;
+    let lastSentMessage = '';
 
     const chat = document.getElementById('chat');
     const input = document.getElementById('messageInput');
@@ -136,6 +231,12 @@ func chatHTML(agentURL string) string {
         }
 
         if (data.result) {
+            // Handle auth_required
+            if (data.result.auth_required && typeof handleAuthRequired === 'function') {
+                handleAuthRequired(lastSentMessage, currentConversationId);
+                return;
+            }
+
             if (data.result.waiting_approval && data.result.approval) {
                 const desc = data.result.approval.description || 'An action requires your approval.';
                 addApproval(data.result.approval.uuid, desc);
@@ -152,6 +253,7 @@ func chatHTML(agentURL string) string {
         sending = true;
         sendBtn.disabled = true;
         input.value = '';
+        lastSentMessage = message;
 
         addMessage('user', message);
         showTyping();
@@ -216,7 +318,9 @@ func chatHTML(agentURL string) string {
             addMessage('error', 'Network error: ' + err.message);
         }
     }
+
+    %s
     </script>
 </body>
-</html>`
+</html>`, logoutButton, agentURL, oauthJS)
 }
