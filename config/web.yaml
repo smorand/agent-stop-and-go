@@ -1,3 +1,17 @@
 agent_url: http://localhost:8080
 host: 0.0.0.0
 port: 8080
+data_dir: ./data
+
+# Optional: OAuth2 authorization code flow (e.g., Google)
+# Uncomment and fill in to enable login/logout and Bearer token forwarding.
+# oauth2:
+#   client_id: "YOUR_CLIENT_ID"
+#   client_secret: "YOUR_CLIENT_SECRET"
+#   auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+#   token_url: "https://oauth2.googleapis.com/token"
+#   revoke_url: "https://oauth2.googleapis.com/revoke"
+#   redirect_url: "http://localhost:8080/callback"
+#   scopes:
+#     - "openid"
+#     - "https://www.googleapis.com/auth/contacts"
