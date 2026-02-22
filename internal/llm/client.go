@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 
 	"agent-stop-and-go/internal/mcp"
@@ -32,11 +33,25 @@ type Response struct {
 	ToolCall *ToolCall `json:"tool_call,omitempty"`
 }
 
-// NewClient creates an LLM client based on the model name.
-// Models starting with "claude-" use Anthropic, everything else uses Gemini.
+// NewClient creates an LLM client based on the model name prefix.
+// Routing: claude-* → Anthropic, openai-* → OpenAI, mistral-* → Mistral,
+// ollama-* → Ollama, openrouter-* → OpenRouter, default → Gemini.
 func NewClient(model string) (Client, error) {
 	if strings.HasPrefix(model, "claude-") {
 		return NewClaudeClient(model)
+	}
+	for _, cfg := range providers {
+		if strings.HasPrefix(model, cfg.prefix) {
+			stripped := strings.TrimPrefix(model, cfg.prefix)
+			c := cfg
+			// Ollama: override base URL from env var
+			if c.name == "ollama" {
+				if envURL := os.Getenv("OLLAMA_BASE_URL"); envURL != "" {
+					c.baseURL = envURL
+				}
+			}
+			return NewOpenAICompatibleClient(c, stripped), nil
+		}
 	}
 	return NewGeminiClient(model)
 }
