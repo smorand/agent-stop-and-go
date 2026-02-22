@@ -187,107 +187,125 @@ func (a *Agent) processOrchestrated(ctx context.Context, conv *conversation.Conv
 	}, nil
 }
 
-// processSimpleMessage is the original single-agent message processing (backward compat).
+// processSimpleMessage runs a multi-turn loop: LLM → tool → LLM → ... until a text response.
 func (a *Agent) processSimpleMessage(ctx context.Context, conv *conversation.Conversation) (*ProcessResult, error) {
-	// Convert conversation messages to LLM format
-	llmMessages := a.convertToLLMMessages(conv)
-
-	// Get available tools (MCP + A2A)
+	const maxToolIterations = 10
 	tools := a.getAllTools()
 
-	// Call LLM with tools
-	response, err := a.llmClient.GenerateWithTools(ctx, a.config.Prompt, llmMessages, tools)
-	if err != nil {
-		errorMsg := fmt.Sprintf("LLM error: %v", err)
-		conv.AddMessage(conversation.RoleAssistant, errorMsg)
-		if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
-			return nil, saveErr
-		}
-		return &ProcessResult{Response: errorMsg, WaitingApproval: false}, nil
-	}
+	for range maxToolIterations {
+		llmMessages := a.convertToLLMMessages(conv)
 
-	// Handle text response (no tool call)
-	if response.ToolCall == nil {
-		conv.AddMessage(conversation.RoleAssistant, response.Text)
-		if err := a.storage.SaveConversation(conv); err != nil {
-			return nil, err
-		}
-		return &ProcessResult{Response: response.Text, WaitingApproval: false}, nil
-	}
-
-	// Handle tool call
-	toolName := response.ToolCall.Name
-	toolArgs := response.ToolCall.Arguments
-
-	// Check if it's an A2A tool call
-	if strings.HasPrefix(toolName, a2aToolPrefix) {
-		agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
-		client, ok := a.a2aClients[agentName]
-		if !ok {
-			errorMsg := "A2A agent not found: " + agentName
+		response, err := a.llmClient.GenerateWithTools(ctx, a.config.Prompt, llmMessages, tools)
+		if err != nil {
+			errorMsg := fmt.Sprintf("LLM error: %v", err)
 			conv.AddMessage(conversation.RoleAssistant, errorMsg)
-			if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
-				return nil, saveErr
-			}
-			return &ProcessResult{Response: errorMsg, WaitingApproval: false}, nil
+			_ = a.storage.SaveConversation(conv)
+			return &ProcessResult{Response: errorMsg}, nil
 		}
 
-		// Check destructive hint for A2A agents
-		if client.DestructiveHint() {
-			description := fmt.Sprintf("**DELEGATE to A2A Agent: %s**\n\nMessage: %v", agentName, toolArgs["message"])
-			approval := conv.SetWaitingApproval(toolName, toolArgs, description)
-			conv.AddToolCall(toolName, toolArgs)
-
-			responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
-			conv.AddMessage(conversation.RoleAssistant, responseText)
-
+		// Text response → done
+		if response.ToolCall == nil {
+			conv.AddMessage(conversation.RoleAssistant, response.Text)
 			if err := a.storage.SaveConversation(conv); err != nil {
 				return nil, err
 			}
-
-			return &ProcessResult{
-				Response:        responseText,
-				WaitingApproval: true,
-				Approval:        approval,
-			}, nil
+			return &ProcessResult{Response: response.Text}, nil
 		}
 
-		return a.executeA2AAndRespond(ctx, conv, client, toolArgs)
-	}
+		toolName := response.ToolCall.Name
+		toolArgs := response.ToolCall.Arguments
 
-	// Get MCP tool info
-	tool := a.mcpClient.GetTool(toolName)
-	if tool == nil {
-		errorMsg := "Tool not found: " + toolName
-		conv.AddMessage(conversation.RoleAssistant, errorMsg)
-		if saveErr := a.storage.SaveConversation(conv); saveErr != nil {
-			return nil, saveErr
+		// --- A2A tool call ---
+		if strings.HasPrefix(toolName, a2aToolPrefix) {
+			agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
+			client, ok := a.a2aClients[agentName]
+			if !ok {
+				errorMsg := "A2A agent not found: " + agentName
+				conv.AddMessage(conversation.RoleAssistant, errorMsg)
+				_ = a.storage.SaveConversation(conv)
+				return &ProcessResult{Response: errorMsg}, nil
+			}
+
+			// Destructive A2A → approval, break loop
+			if client.DestructiveHint() {
+				description := fmt.Sprintf("**DELEGATE to A2A Agent: %s**\n\nMessage: %v", agentName, toolArgs["message"])
+				approval := conv.SetWaitingApproval(toolName, toolArgs, description)
+				conv.AddToolCall(toolName, toolArgs)
+				responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+				conv.AddMessage(conversation.RoleAssistant, responseText)
+				_ = a.storage.SaveConversation(conv)
+				return &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
+			}
+
+			// Non-destructive A2A → execute, continue loop
+			message, _ := toolArgs["message"].(string)
+			conv.AddToolCall(toolName, toolArgs)
+			task, err := client.SendMessage(ctx, message)
+			if err != nil {
+				conv.AddToolResult(toolName, fmt.Sprintf("A2A error: %v", err), true)
+				continue
+			}
+
+			// Sub-agent needs approval → proxy approval, break loop
+			if task.Status.State == "input-required" {
+				description := fmt.Sprintf("**PROXY APPROVAL — A2A Agent: %s**\n\n", client.Name())
+				if task.Status.Message != nil {
+					description += *task.Status.Message
+				}
+				approval := conv.SetWaitingApproval(toolName, toolArgs, description)
+				approval.RemoteTaskID = task.ID
+				approval.RemoteAgentName = client.Name()
+				responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+				conv.AddMessage(conversation.RoleAssistant, responseText)
+				_ = a.storage.SaveConversation(conv)
+				return &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
+			}
+
+			resultText := extractTaskText(task)
+			conv.AddToolResult(toolName, resultText, task.Status.State == "failed")
+			continue
 		}
-		return &ProcessResult{Response: errorMsg, WaitingApproval: false}, nil
-	}
 
-	// If tool is destructive, require approval
-	if tool.DestructiveHint {
-		description := a.formatApprovalDescription(tool.Name, toolArgs)
-		approval := conv.SetWaitingApproval(tool.Name, toolArgs, description)
-		conv.AddToolCall(tool.Name, toolArgs)
-
-		responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
-		conv.AddMessage(conversation.RoleAssistant, responseText)
-
-		if err := a.storage.SaveConversation(conv); err != nil {
-			return nil, err
+		// --- MCP tool call ---
+		tool := a.mcpClient.GetTool(toolName)
+		if tool == nil {
+			errorMsg := "Tool not found: " + toolName
+			conv.AddMessage(conversation.RoleAssistant, errorMsg)
+			_ = a.storage.SaveConversation(conv)
+			return &ProcessResult{Response: errorMsg}, nil
 		}
 
-		return &ProcessResult{
-			Response:        responseText,
-			WaitingApproval: true,
-			Approval:        approval,
-		}, nil
+		// Destructive MCP tool → approval, break loop
+		if tool.DestructiveHint {
+			description := a.formatApprovalDescription(tool.Name, toolArgs)
+			approval := conv.SetWaitingApproval(tool.Name, toolArgs, description)
+			conv.AddToolCall(tool.Name, toolArgs)
+			responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+			conv.AddMessage(conversation.RoleAssistant, responseText)
+			_ = a.storage.SaveConversation(conv)
+			return &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
+		}
+
+		// Non-destructive MCP tool → execute, continue loop
+		conv.AddToolCall(toolName, toolArgs)
+		result, err := a.mcpClient.CallTool(toolName, toolArgs)
+		if err != nil {
+			conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
+			continue
+		}
+		var resultText string
+		if len(result.Content) > 0 {
+			resultText = result.Content[0].Text
+		}
+		conv.AddToolResult(toolName, resultText, result.IsError)
+		continue
 	}
 
-	// Execute MCP tool directly (non-destructive)
-	return a.executeToolAndRespond(ctx, conv, tool.Name, toolArgs)
+	// Safety cap reached
+	response := "Maximum tool call iterations reached."
+	conv.AddMessage(conversation.RoleAssistant, response)
+	_ = a.storage.SaveConversation(conv)
+	return &ProcessResult{Response: response}, nil
 }
 
 // getAllTools returns MCP tools + synthetic A2A tools.
@@ -318,8 +336,10 @@ func (a *Agent) getAllTools() []mcp.Tool {
 }
 
 // convertToLLMMessages converts conversation messages to LLM format.
+// Tool call records are skipped, tool results are included as user messages.
+// Consecutive same-role messages are merged (Gemini requires alternating user/model).
 func (a *Agent) convertToLLMMessages(conv *conversation.Conversation) []llm.Message {
-	messages := make([]llm.Message, 0, len(conv.Messages))
+	var messages []llm.Message
 
 	for _, msg := range conv.Messages {
 		// Skip system messages (handled separately as system instruction)
@@ -327,20 +347,33 @@ func (a *Agent) convertToLLMMessages(conv *conversation.Conversation) []llm.Mess
 			continue
 		}
 
-		// Skip tool messages (they're context for the agent, not for the LLM conversation)
-		if msg.Role == conversation.RoleTool {
+		var role, content string
+
+		// Tool call records: skip (exposing them causes LLMs to mimic the format)
+		if msg.Role == conversation.RoleAssistant && msg.Content == "" && msg.ToolCall != nil {
 			continue
 		}
 
-		role := string(msg.Role)
-		if msg.Role == conversation.RoleAssistant {
-			role = "model"
+		// Tool results → user message
+		if msg.Role == conversation.RoleTool && msg.ToolCall != nil {
+			role = "user"
+			content = fmt.Sprintf("Tool %q returned:\n%s", msg.ToolCall.Name, msg.ToolCall.Result)
+		} else if msg.Content != "" {
+			role = string(msg.Role)
+			if msg.Role == conversation.RoleAssistant {
+				role = "model"
+			}
+			content = msg.Content
+		} else {
+			continue
 		}
 
-		messages = append(messages, llm.Message{
-			Role:    role,
-			Content: msg.Content,
-		})
+		// Merge consecutive same-role messages (Gemini requires alternating user/model)
+		if len(messages) > 0 && messages[len(messages)-1].Role == role {
+			messages[len(messages)-1].Content += "\n\n" + content
+		} else {
+			messages = append(messages, llm.Message{Role: role, Content: content})
+		}
 	}
 
 	return messages
@@ -541,19 +574,28 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 			return nil, nil, fmt.Errorf("proxy approval failed: %w", err)
 		}
 
+		// Remote agent needs another approval → create new proxy approval
+		if task.Status.State == "input-required" {
+			description := fmt.Sprintf("**PROXY APPROVAL — A2A Agent: %s**\n\n", client.Name())
+			if task.Status.Message != nil {
+				description += *task.Status.Message
+			}
+			approval := conv.SetWaitingApproval(toolName, toolArgs, description)
+			approval.RemoteTaskID = task.ID
+			approval.RemoteAgentName = client.Name()
+			responseText := fmt.Sprintf("This action requires approval:\n\n%s\n\nPlease approve or reject using the approval UUID: %s", description, approval.UUID)
+			conv.AddMessage(conversation.RoleAssistant, responseText)
+			if err := a.storage.SaveConversation(conv); err != nil {
+				return nil, nil, err
+			}
+			return conv, &ProcessResult{Response: responseText, WaitingApproval: true, Approval: approval}, nil
+		}
+
 		resultText := extractTaskText(task)
 		isError := task.Status.State == "failed"
 		conv.AddToolResult(toolName, resultText, isError)
 
-		var response string
-		if isError {
-			response = fmt.Sprintf("A2A agent '%s' failed:\n\n```\n%s\n```", remoteAgentName, resultText)
-		} else {
-			response = fmt.Sprintf("A2A agent '%s' responded:\n\n%s", remoteAgentName, resultText)
-		}
-		conv.AddMessage(conversation.RoleAssistant, response)
-
-		// If pipeline state exists, resume the pipeline with the result
+		// Pipeline: resume from paused node
 		if pipelineState != nil {
 			state := NewSessionState()
 			state.Load(pipelineState.SessionState)
@@ -583,13 +625,15 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 			}, nil
 		}
 
-		if err := a.storage.SaveConversation(conv); err != nil {
+		// Simple agent: continue multi-turn loop
+		loopResult, err := a.processSimpleMessage(ctx, conv)
+		if err != nil {
 			return nil, nil, err
 		}
-		return conv, &ProcessResult{Response: response, WaitingApproval: false}, nil
+		return conv, loopResult, nil
 	}
 
-	// No pipeline state → simple agent approval (existing behavior)
+	// No pipeline state → simple agent: execute tool and continue multi-turn loop
 	if pipelineState == nil {
 		if strings.HasPrefix(toolName, a2aToolPrefix) {
 			agentName := strings.TrimPrefix(toolName, a2aToolPrefix)
@@ -597,18 +641,33 @@ func (a *Agent) ResolveApproval(ctx context.Context, approvalUUID string, approv
 			if !ok {
 				return nil, nil, fmt.Errorf("A2A agent not found: %s", agentName)
 			}
-			result, err := a.executeA2AAndRespond(ctx, conv, client, toolArgs)
+			message, _ := toolArgs["message"].(string)
+			task, err := client.SendMessage(ctx, message)
 			if err != nil {
-				return nil, nil, err
+				conv.AddToolResult(toolName, fmt.Sprintf("A2A error: %v", err), true)
+			} else {
+				resultText := extractTaskText(task)
+				conv.AddToolResult(toolName, resultText, task.Status.State == "failed")
 			}
-			return conv, result, nil
+		} else {
+			result, err := a.mcpClient.CallTool(toolName, toolArgs)
+			if err != nil {
+				conv.AddToolResult(toolName, fmt.Sprintf("Tool execution failed: %v", err), true)
+			} else {
+				var resultText string
+				if len(result.Content) > 0 {
+					resultText = result.Content[0].Text
+				}
+				conv.AddToolResult(toolName, resultText, result.IsError)
+			}
 		}
 
-		result, err := a.executeToolAndRespond(ctx, conv, toolName, toolArgs)
+		// Continue multi-turn loop
+		loopResult, err := a.processSimpleMessage(ctx, conv)
 		if err != nil {
 			return nil, nil, err
 		}
-		return conv, result, nil
+		return conv, loopResult, nil
 	}
 
 	// Pipeline resume: execute the approved tool, then continue the pipeline

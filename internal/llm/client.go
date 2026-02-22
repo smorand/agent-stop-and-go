@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"strings"
 
 	"agent-stop-and-go/internal/mcp"
@@ -45,4 +47,39 @@ func ToClaudeRole(role string) string {
 		return "assistant"
 	}
 	return role
+}
+
+// CoerceToolCallArgs coerces tool call arguments to match the schema types.
+// LLMs sometimes return numbers for string fields (e.g., IP "192.168.1.100"
+// returned as float64 3232235876). This function converts values to the
+// declared schema type.
+func CoerceToolCallArgs(tc *ToolCall, tools []mcp.Tool) {
+	if tc == nil {
+		return
+	}
+	for _, tool := range tools {
+		if tool.Name != tc.Name {
+			continue
+		}
+		for propName, propSchema := range tool.InputSchema.Properties {
+			val, ok := tc.Arguments[propName]
+			if !ok {
+				continue
+			}
+			switch propSchema.Type {
+			case "string":
+				switch v := val.(type) {
+				case float64:
+					if v == math.Trunc(v) && !math.IsInf(v, 0) {
+						tc.Arguments[propName] = fmt.Sprintf("%.0f", v)
+					} else {
+						tc.Arguments[propName] = fmt.Sprintf("%g", v)
+					}
+				case bool:
+					tc.Arguments[propName] = fmt.Sprintf("%t", v)
+				}
+			}
+		}
+		break
+	}
 }

@@ -201,5 +201,8 @@ func (c *ClaudeClient) GenerateWithTools(ctx context.Context, systemPrompt strin
 		}
 	}
 
+	// Coerce tool call arguments to match schema types
+	CoerceToolCallArgs(response.ToolCall, tools)
+
 	return response, nil
 }

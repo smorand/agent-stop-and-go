@@ -167,8 +167,13 @@ func adaptTool(t mcpgo.Tool) Tool {
 	// Convert input schema
 	tool.InputSchema = adaptInputSchema(t.InputSchema)
 
-	// Extract destructiveHint from annotations
-	if t.Annotations.DestructiveHint != nil {
+	// Extract destructiveHint from annotations.
+	// ReadOnlyHint=true always means non-destructive.
+	// Per MCP spec, destructiveHint defaults to true when unset, so we
+	// only mark a tool as destructive when explicitly annotated.
+	if t.Annotations.ReadOnlyHint != nil && *t.Annotations.ReadOnlyHint {
+		tool.DestructiveHint = false
+	} else if t.Annotations.DestructiveHint != nil {
 		tool.DestructiveHint = *t.Annotations.DestructiveHint
 	}
 

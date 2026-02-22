@@ -31,7 +31,7 @@ type Config struct {
 type Resource struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
-	Value     int    `json:"value"`
+	Value     string `json:"value"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 }
@@ -94,9 +94,9 @@ func main() {
 	// Register tools
 	mcpServer.AddTool(
 		mcp.NewTool("resources_add",
-			mcp.WithDescription("Add a new resource with a name and integer value"),
+			mcp.WithDescription("Add a new resource with a name and value"),
 			mcp.WithString("name", mcp.Required(), mcp.Description("The name of the resource")),
-			mcp.WithNumber("value", mcp.Required(), mcp.Description("The integer value of the resource")),
+			mcp.WithString("value", mcp.Required(), mcp.Description("The value of the resource")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		makeToolAdd(db),
@@ -144,7 +144,7 @@ func initDB(db *sql.DB) error {
 		CREATE TABLE IF NOT EXISTS resources (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
-			value INTEGER NOT NULL,
+			value TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)
@@ -159,7 +159,7 @@ func makeToolAdd(db *sql.DB) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("name is required"), nil
 		}
 
-		value := req.GetInt("value", 0)
+		value := req.GetString("value", "")
 
 		id := generateID()
 		now := time.Now().UTC().Format(time.RFC3339)
