@@ -4,7 +4,7 @@ A generic API for building async autonomous agents that can orchestrate tools (M
 
 ## Features
 
-- **Multi-LLM**: Supports Gemini and Claude models (`claude-*` → Anthropic, others → Gemini)
+- **Multi-LLM**: 6 providers (Gemini, Claude, OpenAI, Mistral, Ollama, OpenRouter) with prefix-based routing
 - **MCP Tool Support**: Agents use tools from external MCP (Model Context Protocol) servers
 - **A2A Client**: Delegate tasks to other agents using the A2A protocol
 - **A2A Server**: Expose the agent as an A2A-compliant server for discovery and task execution by other agents
@@ -19,9 +19,13 @@ A generic API for building async autonomous agents that can orchestrate tools (M
 ## Quick Start
 
 ```bash
-# Set your LLM API key (one of these, depending on the model)
-export GEMINI_API_KEY=your-api-key       # For Gemini models (default)
-export ANTHROPIC_API_KEY=your-api-key    # For Claude models
+# Set your LLM API key (one or more, depending on your config)
+export GEMINI_API_KEY=your-api-key         # For Gemini models (default)
+# export ANTHROPIC_API_KEY=your-api-key    # For claude-* models
+# export OPENAI_API_KEY=your-api-key       # For openai-* models
+# export MISTRAL_API_KEY=your-api-key      # For mistral-* models
+# export OPENROUTER_API_KEY=your-api-key   # For openrouter-* models
+# Ollama: no API key needed (local inference)
 
 # Build both binaries
 make build
@@ -190,7 +194,7 @@ host: 0.0.0.0        # Listen address
 port: 8080            # Listen port
 data_dir: ./data      # Directory for conversation persistence
 llm:
-  model: gemini-2.5-flash  # Or claude-sonnet-4-5-20250929 for Claude
+  model: gemini-2.5-flash  # Or openai-gpt-4o, mistral-large-latest, ollama-llama3, etc.
 
 # Optional: A2A sub-agents for delegation
 a2a:
@@ -206,7 +210,11 @@ a2a:
 
 **Environment Variables:**
 - `GEMINI_API_KEY`: Required for Gemini models (default). Your Google AI API key.
-- `ANTHROPIC_API_KEY`: Required for Claude models. Your Anthropic API key.
+- `ANTHROPIC_API_KEY`: Required for `claude-*` models. Your Anthropic API key.
+- `OPENAI_API_KEY`: Required for `openai-*` models. Your OpenAI API key.
+- `MISTRAL_API_KEY`: Required for `mistral-*` models. Your Mistral AI API key.
+- `OPENROUTER_API_KEY`: Required for `openrouter-*` models. Your OpenRouter API key.
+- `OLLAMA_BASE_URL`: Optional. Override Ollama endpoint (default: `http://localhost:11434/v1`).
 
 ## Agent Orchestration
 

@@ -6,7 +6,7 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 mcp:
   command: ./bin/mcp-resources
@@ -21,7 +21,7 @@ agent:
   agents:
     - name: analyzer
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: analysis
       prompt: |
         You are a request analyzer. Analyze the user's request and output a structured summary.
@@ -34,7 +34,7 @@ agent:
 
     - name: executor
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: result
       prompt: |
         You are a resource executor. Based on the following analysis, execute the appropriate action using tools.

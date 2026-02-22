@@ -8,7 +8,7 @@ Generic API for async autonomous agents with MCP tool support, A2A sub-agent del
 
 - **Language**: Go 1.24
 - **Web Framework**: Fiber
-- **LLM**: Gemini / Claude (multi-provider: `claude-*` → Anthropic, others → Gemini)
+- **LLM**: Multi-provider (Gemini, Claude, OpenAI, Mistral, Ollama, OpenRouter)
 - **MCP Protocol**: Streamable HTTP (primary) or stdio (legacy) via `github.com/mark3labs/mcp-go`
 - **A2A Protocol**: JSON-RPC 2.0 over HTTPS
 - **Config**: YAML (gopkg.in/yaml.v3)
@@ -20,6 +20,10 @@ Generic API for async autonomous agents with MCP tool support, A2A sub-agent del
 
 - `GEMINI_API_KEY`: Required for Gemini models (default). API key for Gemini LLM.
 - `ANTHROPIC_API_KEY`: Required for Claude models. API key for Anthropic Claude.
+- `OPENAI_API_KEY`: Required for `openai:*` models. API key from OpenAI Platform.
+- `MISTRAL_API_KEY`: Required for `mistral:*` models. API key from Mistral AI Console.
+- `OPENROUTER_API_KEY`: Required for `openrouter:*` models. API key from OpenRouter.
+- `OLLAMA_BASE_URL`: Optional. Override Ollama endpoint (default: `http://localhost:11434/v1`).
 
 ## Key Commands
 
@@ -57,7 +61,7 @@ cmd/
 internal/
 ├── api/                          # HTTP handlers (Fiber)
 ├── agent/                        # Agent logic with LLM + MCP + A2A + orchestration
-├── llm/                          # Multi-provider LLM clients (60s timeout)
+├── llm/                          # Multi-provider LLM clients (60s timeout, 6 providers)
 ├── mcp/                          # MCP client (dual transport: HTTP + stdio)
 │   ├── client.go                 # Client interface, StdioClient, factory
 │   ├── client_http.go            # HTTPClient (Streamable HTTP via mcp-go)
@@ -120,7 +124,7 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash    # or claude-sonnet-4-5-20250929 for Claude
+  model: google:gemini-2.5-flash    # See LLM Provider Routing for all options
 
 mcp_servers:
   - name: resources
@@ -152,12 +156,12 @@ agent:
   agents:
     - name: analyzer
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: analysis    # stores output in session state
       prompt: "Analyze: ..."
     - name: executor
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       prompt: "Execute based on {analysis}"  # {placeholder} resolves from session state
 ```
 
@@ -168,7 +172,7 @@ agent:
 | `name` | all | Node identifier |
 | `type` | all | `llm`, `sequential`, `parallel`, `loop`, `a2a` |
 | `agents` | sequential, parallel, loop | Sub-agent list |
-| `model` | llm | LLM model — `claude-*` for Anthropic, others for Gemini (defaults to `llm.model`) |
+| `model` | llm | LLM model — `provider:model` format (e.g. `google:gemini-2.5-flash`, `anthropic:claude-sonnet-4-6`, `openai:gpt-4o`) |
 | `prompt` | llm, a2a | System prompt / message template with `{placeholders}` |
 | `output_key` | llm, a2a | Key to store output in session state |
 | `can_exit_loop` | llm | Gives the node an `exit_loop` tool |
@@ -176,6 +180,21 @@ agent:
 | `url` | a2a | Remote agent URL |
 | `destructiveHint` | a2a | Requires approval |
 | `a2a` | llm | Per-node A2A tools for LLM decision |
+
+## LLM Provider Routing
+
+Format: `provider:model` (colon is mandatory).
+
+| Provider | Prefix | Example | Base URL | API Key Env |
+|----------|--------|---------|----------|-------------|
+| Google Gemini | `google:` | `google:gemini-2.5-flash` | `https://generativelanguage.googleapis.com` | `GEMINI_API_KEY` |
+| Anthropic Claude | `anthropic:` | `anthropic:claude-sonnet-4-6` | `https://api.anthropic.com/v1` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai:` | `openai:gpt-4o` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| Mistral | `mistral:` | `mistral:mistral-large-latest` | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| Ollama | `ollama:` | `ollama:llama3` | `http://localhost:11434/v1` | *(none)* |
+| OpenRouter | `openrouter:` | `openrouter:anthropic/claude-3-opus` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+
+Three client implementations: `GeminiClient`, `ClaudeClient`, `OpenAICompatibleClient` (shared by OpenAI, Mistral, Ollama, OpenRouter). See `.agent_docs/llm-providers.md` for details.
 
 ## MCP Tools (mcp-resources)
 
@@ -301,6 +320,7 @@ roots:
 
 ## Documentation Index
 
+- `.agent_docs/llm-providers.md` - LLM provider architecture, routing, adding new providers
 - `.agent_docs/golang.md` - Go coding standards and project conventions
 - `.agent_docs/makefile.md` - Makefile targets and build documentation
 - `.agent_docs/filesystem.md` - MCP filesystem server: architecture, security model, tools, config, E2E tests

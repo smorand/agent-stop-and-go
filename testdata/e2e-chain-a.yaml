@@ -6,7 +6,7 @@ port: 9091
 data_dir: ./data/e2e_test_chain_a
 
 llm:
-  model: gemini-3-flash-preview
+  model: google:gemini-3-flash-preview
 
 mcp_servers:
   - name: resources
@@ -18,7 +18,7 @@ agent:
   agents:
     - name: analyzer
       type: llm
-      model: gemini-3-flash-preview
+      model: google:gemini-3-flash-preview
       output_key: analysis
       prompt: |
         You are an intent analyzer. Read the user's request and output a single line.

@@ -17,7 +17,7 @@ This enables building production-ready agent pipelines where humans remain in co
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-LLM Support** | Supports Gemini and Claude models with automatic routing based on model name |
+| **Multi-LLM Support** | 6 providers (Gemini, Claude, OpenAI, Mistral, Ollama, OpenRouter) with `provider:model` routing |
 | **MCP Tool Execution** | Agents call external tools via MCP Streamable HTTP (primary) or stdio (legacy), with multi-server aggregation |
 | **A2A Protocol** | Agents delegate tasks to other agents via JSON-RPC 2.0 over HTTPS |
 | **Approval Workflow** | Destructive operations require explicit human approval before execution |
@@ -35,7 +35,7 @@ This enables building production-ready agent pipelines where humans remain in co
 |-----------|------------|
 | Language | Go 1.24 |
 | Web Framework | [Fiber](https://gofiber.io/) v2 |
-| LLM Providers | Google Gemini API, Anthropic Claude API |
+| LLM Providers | Google Gemini, Anthropic Claude, OpenAI, Mistral, Ollama, OpenRouter |
 | MCP Protocol | Streamable HTTP (primary) or stdio (legacy) via `github.com/mark3labs/mcp-go` |
 | A2A Protocol | JSON-RPC 2.0 over HTTPS |
 | Configuration | YAML (`gopkg.in/yaml.v3`) |
@@ -51,7 +51,7 @@ This enables building production-ready agent pipelines where humans remain in co
 
 - Go 1.24 or later
 - Make
-- A Gemini API key (`GEMINI_API_KEY`) or Anthropic API key (`ANTHROPIC_API_KEY`)
+- An LLM API key (see Environment Variables below)
 
 ### Steps
 
@@ -60,9 +60,13 @@ This enables building production-ready agent pipelines where humans remain in co
 git clone https://github.com/smorand/agent-stop-and-go.git
 cd agent-stop-and-go
 
-# 2. Set your LLM API key
-export GEMINI_API_KEY=your-api-key       # For Gemini models (default)
-# export ANTHROPIC_API_KEY=your-api-key  # For Claude models
+# 2. Set your LLM API key (one or more depending on your config)
+export GEMINI_API_KEY=your-api-key         # For google:* models
+# export ANTHROPIC_API_KEY=your-api-key    # For anthropic:* models
+# export OPENAI_API_KEY=your-api-key       # For openai:* models
+# export MISTRAL_API_KEY=your-api-key      # For mistral:* models
+# export OPENROUTER_API_KEY=your-api-key   # For openrouter:* models
+# Ollama: no API key needed (local inference)
 
 # 3. Build all binaries
 make build
@@ -111,7 +115,7 @@ agent-stop-and-go/
 ├── internal/
 │   ├── api/                       # HTTP handlers, routes, A2A server, docs
 │   ├── agent/                     # Core agent logic, orchestration engine
-│   ├── llm/                       # Multi-provider LLM clients (Gemini, Claude)
+│   ├── llm/                       # Multi-provider LLM clients (6 providers)
 │   ├── mcp/                       # MCP client (multi-server via CompositeClient, HTTP + stdio)
 │   ├── filesystem/                # MCP filesystem server (sandboxed file operations)
 │   ├── a2a/                       # A2A JSON-RPC client (HTTPS)

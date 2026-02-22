@@ -33,12 +33,33 @@ type Response struct {
 }
 
 // NewClient creates an LLM client based on the model name.
-// Models starting with "claude-" use Anthropic, everything else uses Gemini.
+//
+// Format: "provider:model" (colon is mandatory).
+//
+//	"google:gemini-2.5-flash"       → GeminiClient
+//	"anthropic:claude-sonnet-4-6"   → ClaudeClient
+//	"openai:gpt-4o"                 → OpenAICompatibleClient (OpenAI)
+//	"mistral:mistral-large-latest"  → OpenAICompatibleClient (Mistral)
+//	"ollama:llama3"                 → OpenAICompatibleClient (Ollama)
+//	"openrouter:anthropic/claude-3" → OpenAICompatibleClient (OpenRouter)
 func NewClient(model string) (Client, error) {
-	if strings.HasPrefix(model, "claude-") {
-		return NewClaudeClient(model)
+	provider, modelName, hasColon := strings.Cut(model, ":")
+	if !hasColon {
+		return nil, fmt.Errorf("invalid model format %q: expected \"provider:model\" (e.g. \"google:gemini-2.5-flash\")", model)
 	}
-	return NewGeminiClient(model)
+
+	switch provider {
+	case "google":
+		return NewGeminiClient(modelName)
+	case "anthropic":
+		return NewClaudeClient(modelName)
+	default:
+		cfg, ok := providers[provider]
+		if !ok {
+			return nil, fmt.Errorf("unknown LLM provider: %q", provider)
+		}
+		return NewOpenAICompatibleClient(cfg, modelName), nil
+	}
 }
 
 // ToClaudeRole converts a role to Claude's format ("model" → "assistant").

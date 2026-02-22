@@ -4,27 +4,30 @@ This document covers every feature of Agent Stop and Go in detail, including con
 
 ## Multi-LLM Support
 
-The system supports multiple LLM providers with automatic routing based on model name prefix.
+The system supports 6 LLM providers through 3 client implementations, with explicit `provider:model` routing.
 
 ### Provider Routing
 
-| Provider | Model Prefix | Example Models | Env Variable |
-|----------|-------------|----------------|-------------|
-| Google Gemini | (default, any non-`claude-*`) | `gemini-2.5-flash`, `gemini-2.5-pro` | `GEMINI_API_KEY` |
-| Anthropic Claude | `claude-*` | `claude-sonnet-4-5-20250929` | `ANTHROPIC_API_KEY` |
+Format: `provider:model` (colon is mandatory). Missing colon or unknown provider returns an error.
 
-The routing logic is in `internal/llm/client.go`:
+| Provider | Prefix | Example Models | Env Variable |
+|----------|--------|----------------|-------------|
+| Google Gemini | `google:` | `google:gemini-2.5-flash`, `google:gemini-2.5-pro` | `GEMINI_API_KEY` |
+| Anthropic Claude | `anthropic:` | `anthropic:claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai:` | `openai:gpt-4o`, `openai:gpt-4o-mini` | `OPENAI_API_KEY` |
+| Mistral | `mistral:` | `mistral:mistral-large-latest`, `mistral:mistral-small-latest` | `MISTRAL_API_KEY` |
+| Ollama | `ollama:` | `ollama:llama3`, `ollama:mistral` | *(none)* |
+| OpenRouter | `openrouter:` | `openrouter:anthropic/claude-3-opus` | `OPENROUTER_API_KEY` |
 
-```go
-func NewClient(model string) (Client, error) {
-    if strings.HasPrefix(model, "claude-") {
-        return NewClaudeClient(model)
-    }
-    return NewGeminiClient(model)
-}
-```
+The model name after the colon is sent directly to the provider API without modification.
 
-### LLM Client Interface
+### Client Implementations
+
+| Client | Providers | File |
+|--------|-----------|------|
+| `GeminiClient` | Google Gemini | `internal/llm/gemini.go` |
+| `ClaudeClient` | Anthropic Claude | `internal/llm/claude.go` |
+| `OpenAICompatibleClient` | OpenAI, Mistral, Ollama, OpenRouter | `internal/llm/openai.go` |
 
 All providers implement the same interface:
 
@@ -34,24 +37,35 @@ type Client interface {
 }
 ```
 
+The `OpenAICompatibleClient` is parameterized by a `providerConfig` containing base URL, API key env var, and optional custom headers. Adding a new OpenAI-compatible provider requires only adding a new entry to the `providers` registry map.
+
 ### Model Configuration
 
 The default model is set at the top level. Individual orchestration nodes can override it:
 
 ```yaml
 llm:
-  model: gemini-2.5-flash  # default for all nodes
+  model: google:gemini-2.5-flash  # default for all nodes
 
 agent:
   type: sequential
   agents:
     - name: analyzer
       type: llm
-      model: claude-sonnet-4-5-20250929  # overrides default (uses Anthropic)
+      model: openai:gpt-4o  # overrides default (uses OpenAI)
+    - name: local-check
+      type: llm
+      model: ollama:llama3   # uses local Ollama
     - name: executor
       type: llm
-      # inherits gemini-2.5-flash from llm.model
+      # inherits google:gemini-2.5-flash from llm.model
 ```
+
+### Provider-Specific Behavior
+
+- **Ollama**: No API key required. `Authorization` header is omitted. Base URL configurable via `OLLAMA_BASE_URL` env var (default: `http://localhost:11434/v1`).
+- **OpenRouter**: Includes hardcoded `HTTP-Referer: https://github.com/agentic-platform` and `X-Title: Agent Stop and Go` headers.
+- **Lazy validation**: Missing API keys don't cause errors at startup. The error occurs on first API call (HTTP 401).
 
 ### Timeout
 
@@ -61,6 +75,7 @@ All LLM HTTP clients use a **60-second timeout**.
 
 - **Gemini**: No explicit max tokens (uses API default)
 - **Claude**: Fixed at 4096 tokens per request
+- **OpenAI-compatible**: No explicit max tokens (uses API default)
 
 ## MCP Tool Execution
 
@@ -675,8 +690,12 @@ agent:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `GEMINI_API_KEY` | Yes (for Gemini models) | Google Gemini API key |
-| `ANTHROPIC_API_KEY` | Yes (for Claude models) | Anthropic Claude API key |
+| `GEMINI_API_KEY` | When using Gemini models (default) | Google Gemini API key |
+| `ANTHROPIC_API_KEY` | When using `claude-*` models | Anthropic Claude API key |
+| `OPENAI_API_KEY` | When using `openai-*` models | OpenAI API key |
+| `MISTRAL_API_KEY` | When using `mistral-*` models | Mistral AI API key |
+| `OPENROUTER_API_KEY` | When using `openrouter-*` models | OpenRouter API key |
+| `OLLAMA_BASE_URL` | Optional | Ollama endpoint (default: `http://localhost:11434/v1`) |
 
 ### Command-Line Flags
 

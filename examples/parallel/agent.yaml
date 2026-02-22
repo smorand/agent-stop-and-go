@@ -6,7 +6,7 @@ port: 8080
 data_dir: ./data
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 mcp:
   command: ./bin/mcp-resources
@@ -24,14 +24,14 @@ agent:
       agents:
         - name: list-all
           type: llm
-          model: gemini-2.5-flash
+          model: google:gemini-2.5-flash
           output_key: all_resources
           prompt: |
             List all resources using the resources_list tool. Return the raw result.
 
         - name: count-analysis
           type: llm
-          model: gemini-2.5-flash
+          model: google:gemini-2.5-flash
           output_key: count_info
           prompt: |
             List all resources using the resources_list tool. Then count how many resources
@@ -39,7 +39,7 @@ agent:
 
     - name: summarizer
       type: llm
-      model: gemini-2.5-flash
+      model: google:gemini-2.5-flash
       output_key: summary
       prompt: |
         You are a data summarizer. Based on the following information gathered in parallel,

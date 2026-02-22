@@ -19,7 +19,7 @@ port: 8080
 data_dir: /app/data/agent-a
 
 llm:
-  model: gemini-3-flash-preview
+  model: google:gemini-3-flash-preview
 
 a2a:
   - name: resource-agent

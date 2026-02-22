@@ -20,7 +20,7 @@ port: 8080
 data_dir: ./data/web-direct
 
 llm:
-  model: gemini-2.5-flash
+  model: google:gemini-2.5-flash
 
 mcp:
   command: ./bin/mcp-resources
