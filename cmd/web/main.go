@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -26,6 +27,25 @@ func main() {
 		log.Fatalf("Failed to load web config: %v", err)
 	}
 
+	// Ensure data directory exists
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		log.Fatalf("Failed to create data directory %s: %v", cfg.DataDir, err)
+	}
+
+	// Initialize OAuth2 handler (optional)
+	var oauthHandler *OAuthHandler
+	if cfg.OAuth2 != nil {
+		dbPath := filepath.Join(cfg.DataDir, "sessions.db")
+		sessions, err := NewSessionStore(dbPath)
+		if err != nil {
+			log.Fatalf("Failed to open session store: %v", err)
+		}
+		defer sessions.Close()
+
+		oauthHandler = NewOAuthHandler(cfg.OAuth2, sessions, cfg.Host)
+		log.Printf("OAuth2 support enabled (redirect: %s)", cfg.OAuth2.RedirectURL)
+	}
+
 	// HTTP client to communicate with the agent REST API
 	httpClient := &http.Client{}
 
@@ -35,11 +55,45 @@ func main() {
 
 	app.Use(logger.New())
 
+	// Register OAuth2 routes if enabled
+	if oauthHandler != nil {
+		oauthHandler.RegisterRoutes(app)
+	}
+
 	// Serve chat UI
 	app.Get("/", func(c *fiber.Ctx) error {
+		hasOAuth := cfg.OAuth2 != nil
 		c.Set("Content-Type", "text/html")
-		return c.SendString(chatHTML(cfg.AgentURL))
+		return c.SendString(chatHTML(cfg.AgentURL, hasOAuth))
 	})
+
+	// getBearerToken extracts the Bearer token from the session cookie.
+	getBearerToken := func(c *fiber.Ctx) string {
+		if oauthHandler == nil {
+			return ""
+		}
+		sessionID := c.Cookies(sessionCookieName)
+		return oauthHandler.GetBearerToken(sessionID)
+	}
+
+	// proxyRequest creates an HTTP request to the agent API with optional Bearer token.
+	proxyRequest := func(c *fiber.Ctx, method, url string, body []byte) (*http.Response, error) {
+		var bodyReader io.Reader
+		if body != nil {
+			bodyReader = bytes.NewReader(body)
+		}
+		httpReq, err := http.NewRequestWithContext(c.Context(), method, url, bodyReader)
+		if err != nil {
+			return nil, err
+		}
+		if body != nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+		}
+		if token := getBearerToken(c); token != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+token)
+		}
+		return httpClient.Do(httpReq)
+	}
 
 	// API: send message → REST API (create conversation or send message)
 	app.Post("/api/send", func(c *fiber.Ctx) error {
@@ -56,10 +110,8 @@ func main() {
 
 		var url string
 		if req.ConversationID == "" {
-			// Create new conversation with initial message
 			url = strings.TrimRight(cfg.AgentURL, "/") + "/conversations"
 		} else {
-			// Send message to existing conversation
 			url = strings.TrimRight(cfg.AgentURL, "/") + "/conversations/" + req.ConversationID + "/messages"
 		}
 
@@ -67,13 +119,8 @@ func main() {
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to marshal request: %v", err)})
 		}
-		httpReq, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(body))
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
 
-		resp, err := httpClient.Do(httpReq)
+		resp, err := proxyRequest(c, "POST", url, body)
 		if err != nil {
 			return c.Status(502).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -105,13 +152,8 @@ func main() {
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": fmt.Sprintf("failed to marshal request: %v", err)})
 		}
-		httpReq, err := http.NewRequestWithContext(c.Context(), "POST", url, bytes.NewReader(body))
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
 
-		resp, err := httpClient.Do(httpReq)
+		resp, err := proxyRequest(c, "POST", url, body)
 		if err != nil {
 			return c.Status(502).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -130,12 +172,7 @@ func main() {
 		convID := c.Params("id")
 		url := strings.TrimRight(cfg.AgentURL, "/") + "/conversations/" + convID
 
-		httpReq, err := http.NewRequestWithContext(c.Context(), "GET", url, nil)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		resp, err := httpClient.Do(httpReq)
+		resp, err := proxyRequest(c, "GET", url, nil)
 		if err != nil {
 			return c.Status(502).JSON(fiber.Map{"error": err.Error()})
 		}
